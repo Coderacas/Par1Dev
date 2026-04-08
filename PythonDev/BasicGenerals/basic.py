@@ -1,9 +1,19 @@
 import cv2 as cv
 import os
 
-base_path = os.path.dirname(__file__) #Importar la dirección de la carpeta
+script_dir = os.path.dirname(os.path.abspath(__file__))   # PythonDev/BasicGenerals
+repo_dir = os.path.dirname(os.path.dirname(script_dir))   # Par1Dev
+
 imname = 'ouchie.jpg'
-img_path = os.path.join(base_path, 'Photos',imname) #Dirección base + Photos + nombre de la foto 
+img_path = os.path.join(repo_dir, 'Photos', 'Stock Pics', imname)
+
+img = cv.imread(img_path)
+
+if img is None:
+    print(f'No se pudo cargar la imagen: {img_path}')
+else:
+    print('Imagen cargada correctamente')
+    print(img.shape)
 
 img = cv.imread(img_path)
 
