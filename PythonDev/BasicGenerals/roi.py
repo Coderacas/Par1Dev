@@ -5,7 +5,9 @@ script_dir = os.path.dirname(os.path.abspath(__file__))   # PythonDev/BasicGener
 repo_dir = os.path.dirname(os.path.dirname(script_dir))   # Par1Dev
 
 imname = 'ouchie.jpg'
-img_path = os.path.join(repo_dir, 'Photos', 'Stock Pics', imname)
+folname = 'Photos'
+fol2name = 'Stock Pics'
+img_path = os.path.join(repo_dir, folname, fol2name, imname)
 
 img = cv.imread(img_path)
 
@@ -17,7 +19,7 @@ else:
 
 # Cargar imagen (puede ser tu frame capturado)
 img = cv.imread(img_path)
-cv.imshow("Imagen",img)
+
 # #frame = cv.imread(img_path)
 
 # # Seleccionar ROI manualmente
@@ -33,7 +35,7 @@ roi_crop = img[y:y+h, x:x+w] # Opción A si la variable es img
 # #cropped = frame[y:y+h, x:x+w] # Opción B si la variable es frameN
 
 # # printeas
-cv.imshow("Original", img)
+# cv.imshow("Original", img)
 #cv.imshow("ROI Crop", cropped)
 
 print(f"ROI seleccionada: x={x}, y={y}, w={w}, h={h}")
