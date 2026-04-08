@@ -18,7 +18,7 @@ img = np.zeros((300,300,3), dtype='uint8')
 # cv.line(img, (20,20), (150, 300), (0,255,0), thickness=5)
 
 # Put text 
-cv.putText(img,"Ball",(150,150), cv.FONT_HERSHEY_TRIPLEX,1,(255,0,0))
+#cv.putText(img,"Ball",(150,150), cv.FONT_HERSHEY_TRIPLEX,1,(255,0,0))
 
 cv.imshow('Imagen',img)
 
