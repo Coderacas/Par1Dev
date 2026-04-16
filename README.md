@@ -36,7 +36,7 @@ Carpeta destinada al desarrollo del software en Python.
 #### Subcarpetas
 
 - `basic generals`: funciones genéricas, pruebas base y códigos de referencia.
-- `project`: módulos del proyecto más cercanos a una versión final. Actualmente incluye un prototipo de selección de ROI.
+- `project`: módulos del proyecto más cercanos a una versión final. Actualmente incluye un prototipo de selección de ROI. Dentro se encuentran FinalFunction 
 
 ### `Light control`
 
@@ -68,3 +68,7 @@ Más adelante se busca integrar:
 
 Este repositorio funciona como base de desarrollo para prototipos y pruebas del sistema.  
 La estructura y los módulos seguirán evolucionando conforme avance el proyecto.
+
+## V2 
+* Selector de ROI desde cámara y fotos descargadas con calibración manual.
+* Photos de alta calidad tomadas por el prototipo 
