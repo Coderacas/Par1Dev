@@ -72,3 +72,15 @@ La estructura y los módulos seguirán evolucionando conforme avance el proyecto
 ## V2 
 * Selector de ROI desde cámara y fotos descargadas con calibración manual.
 * Photos de alta calidad tomadas por el prototipo 
+
+## V3
+- Se modularizó el procesamiento de imágenes en archivos separados (`image_io.py`, `roi_utils.py`, `features.py`, `glare.py` y `main.py`).
+- Ya se puede cargar una imagen desde el repositorio, seleccionar una ROI manualmente y recortarla con una sola calibración.
+- La función de recorte ahora convierte la ROI a escala de grises, la normaliza a rango `[0,1]` y la deja en `float32`.
+- Se implementó extracción de features básicas de la ROI:
+  - intensidad media, desviación estándar, mínimo y máximo
+  - gradiente medio, desviación estándar y máximo
+  - laplaciano absoluto medio y desviación estándar
+- Se corrigió un error de normalización doble que estaba reduciendo incorrectamente la intensidad máxima.
+- Se creó una primera versión de `glare.py` para estimar el porcentaje de glare dentro de una ROI usando umbral de intensidad.
+- Se dejó la base lista para el siguiente paso: procesar varias imágenes, hacer stack y avanzar hacia photometric stereo.
