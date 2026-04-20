@@ -84,3 +84,12 @@ La estructura y los módulos seguirán evolucionando conforme avance el proyecto
 - Se corrigió un error de normalización doble que estaba reduciendo incorrectamente la intensidad máxima.
 - Se creó una primera versión de `glare.py` para estimar el porcentaje de glare dentro de una ROI usando umbral de intensidad.
 - Se dejó la base lista para el siguiente paso: procesar varias imágenes, hacer stack y avanzar hacia photometric stereo.
+
+## V4 
+
+- Integración de cámara y comunicación serial.
+- Captura automática de imagen al recibir `'s'` desde Arduino.
+- Aplicación de ROI fija para recorte de la pelota.
+- Cálculo de `basic_features` y `glare_stats` sobre la imagen recortada.
+- Envío de `'b'` al finalizar el procesamiento.
+- Mejora en el handshake Arduino-Python para evitar activaciones repetidas del motor.
