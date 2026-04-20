@@ -1,7 +1,7 @@
 import serial
 import time
 
-PUERTO = 'COM5'     # Cambia esto por tu puerto Arduino
+PUERTO = 'COM4'     # Cambia esto por tu puerto Arduino
 BAUDRATE = 9600
 
 def main():

@@ -45,6 +45,7 @@ def main():
         return
 
     x, y, w, h = ROI(captured_gray)
+    print(x, y, w, h)
     im1mat = croptoroi(captured_gray, x, y, w, h)
 
     features = basic_features(im1mat)
