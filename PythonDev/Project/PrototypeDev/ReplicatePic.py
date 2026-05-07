@@ -1,6 +1,7 @@
 import time
 import cv2 as cv
 import serial
+from serial.tools import list_ports
 
 
 from camera_utils import (
@@ -16,8 +17,23 @@ from features import basic_features
 from glare import glare_stats
 
 
-PUERTO = "COM4"
 BAUDRATE = 9600
+ARDUINO_KEYWORDS = ("arduino", "ch340", "wch", "usb serial", "usb-serial")
+
+
+def find_arduino_port():
+    ports = list(list_ports.comports())
+
+    for port in ports:
+        description = f"{port.description} {port.manufacturer}".lower()
+        if any(keyword in description for keyword in ARDUINO_KEYWORDS):
+            return port.device
+
+    if len(ports) == 1:
+        return ports[0].device
+
+    available_ports = ", ".join(port.device for port in ports) or "ninguno"
+    raise RuntimeError(f"No se encontro Arduino. Puertos disponibles: {available_ports}")
 
 
 def main():
@@ -25,21 +41,24 @@ def main():
     ser = None
 
     try:
+        port = find_arduino_port()
+        print(f"Arduino detectado en {port}.")
+
         cam = open_camera()
         set_camera(cam, width=640, height=480, buffer_size=1)
         warmup_camera(cam, frames=10)
 
-        ser = serial.Serial(PUERTO, BAUDRATE, timeout=1)
+        ser = serial.Serial(port, BAUDRATE, timeout=1)
         time.sleep(2)
 
-        print(f"Esperando señales 's' desde Arduino en {PUERTO}...")
+        print(f"Esperando señales 's' desde Arduino en {port}...")
 
         while True:
             if ser.in_waiting > 0:
                 dato = ser.read().decode("utf-8", errors="ignore").strip()
 
-                if dato == "s":
-                    print("\nSeñal 's' recibida. Capturando imagen...")
+                if dato in ("a", "b", "c", "d", "e", "f"):
+                    print("\nSeñal recibida. Capturando imagen...")
 
                     captured_gray = capture_gray_frame(cam, normalize=True)
 
@@ -57,8 +76,8 @@ def main():
                     for k, v in glare.items():
                         print(f"{k}: {v}")
 
-                    ser.write(b"b")
-                    print("Se envió 'b' al Arduino.")
+                    ser.write(b"k")
+                    print("Se envió 'k' al Arduino.")
 
                 elif dato == "q":
                     print("Señal 'q' recibida. Saliendo...")
@@ -85,3 +104,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
