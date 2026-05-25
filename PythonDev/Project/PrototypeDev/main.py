@@ -47,7 +47,14 @@ from glare         import glare_stats
 # ─────────────────────────────────────────────────────────────
 BAUDRATE = 9600
 
-ROI_X, ROI_Y, ROI_W, ROI_H = 277, 54, 109, 112
+# Un ROI por estacion: (x, y, w, h)
+# Ajusta cada tupla con las coordenadas reales de cada estacion.
+ROIS_POR_ESTACION = [
+    (277, 54, 109, 112),  # Estacion 1
+    (277, 54, 109, 112),  # Estacion 2
+    (277, 54, 109, 112),  # Estacion 3
+    (277, 54, 109, 112),  # Estacion 4
+]
 
 NUM_ESTACIONES = 4
 LUCES_POR_EST  = 4
@@ -56,6 +63,9 @@ SERVO_SETTLE_S    = 0.5
 STEPPER_TIMEOUT_S = 30.0
 
 ARDUINO_KEYWORDS = ("arduino", "ch340", "wch", "usb serial", "usb-serial")
+
+if len(ROIS_POR_ESTACION) != NUM_ESTACIONES:
+    raise ValueError("ROIS_POR_ESTACION debe tener un ROI por estacion.")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -310,8 +320,10 @@ def main():
                         f"Estación {estacion + 1}, cara {luz + 1} — capturando..."
                     )
 
+                    roi_x, roi_y, roi_w, roi_h = ROIS_POR_ESTACION[estacion]
+
                     gray = capture_gray_frame(cam, normalize=True)
-                    roi  = croptoroi(gray, ROI_X, ROI_Y, ROI_W, ROI_H)
+                    roi  = croptoroi(gray, roi_x, roi_y, roi_w, roi_h)
                     vec  = extraer_features(roi)
 
                     matrices[estacion][luz] = vec
