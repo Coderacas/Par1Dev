@@ -6,6 +6,19 @@ int clockPin = 12;
 int latchPin = 8;
 
 // =====================================================
+// SERVO
+// =====================================================
+#include <Servo.h>
+
+const int pinServo = 9;
+const int SERVO_CENTRO = 90;
+const int SERVO_DELTA  = 30;
+const int SERVO_BUENA  = SERVO_CENTRO + SERVO_DELTA;
+const int SERVO_MALA   = SERVO_CENTRO - SERVO_DELTA;
+
+Servo servoClasificador;
+
+// =====================================================
 // SENSOR IN PLACE
 // =====================================================
 const int pinInPlace = A5;
@@ -92,6 +105,9 @@ void setup()
   digitalWrite(latchPin, LOW);
 
   Serial.begin(9600);
+
+  servoClasificador.attach(pinServo);
+  servoClasificador.write(SERVO_CENTRO);
 
   motor.setSpeed(velocidadStepper);
 
@@ -268,7 +284,11 @@ void apagarTodasLasLuces()
 // =====================================================
 void servoPos(bool buena)
 {
-  // TODO: agregar Servo.h y servo.write() aquí si ya tienes servo físico.
+  int angulo = buena ? SERVO_BUENA : SERVO_MALA;
+  angulo = constrain(angulo, SERVO_CENTRO - SERVO_DELTA, SERVO_CENTRO + SERVO_DELTA);
+
+  servoClasificador.write(angulo);
+
   if (buena) Serial.println("SERVO_BUENA");
   else       Serial.println("SERVO_MALA");
 }
@@ -429,6 +449,7 @@ void apagarBobinasStepper()
 void apagarTodoSeguro()
 {
   apagarBobinasStepper();
+  servoClasificador.write(SERVO_CENTRO);
 
   estadoReg1 = B00000000;
   estadoReg2 = B00000000;
