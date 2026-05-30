@@ -50,10 +50,10 @@ BAUDRATE = 9600
 # Un ROI por estacion: (x, y, w, h)
 # Ajusta cada tupla con las coordenadas reales de cada estacion.
 ROIS_POR_ESTACION = [
-    (277, 54, 109, 112),  # Estacion 1
-    (277, 54, 109, 112),  # Estacion 2
-    (277, 54, 109, 112),  # Estacion 3
-    (277, 54, 109, 112),  # Estacion 4
+    (465, 364, 108, 100),  # Estacion 1
+    (294, 341, 100, 103),  # Estacion 2
+    (281, 116, 85, 87),  # Estacion 3
+    (146, 120, 89, 88),  # Estacion 4
 ]
 
 NUM_ESTACIONES = 4

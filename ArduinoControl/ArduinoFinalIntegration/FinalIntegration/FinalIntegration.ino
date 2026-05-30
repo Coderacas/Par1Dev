@@ -21,7 +21,7 @@ Servo servoClasificador;
 // =====================================================
 // SENSOR IN PLACE
 // =====================================================
-const int pinInPlace = A5;
+const int pinInPlace = A0;
 
 // Si usas resistencia externa pull-down:
 //   sensor activo = HIGH
@@ -29,7 +29,7 @@ const int pinInPlace = A5;
 // Si usas INPUT_PULLUP:
 //   sensor activo = LOW
 //
-// En este código está configurado para activo HIGH.
+// En este codigo esta configurado para activo HIGH.
 const bool SENSOR_ACTIVO = HIGH;
 
 // =====================================================
@@ -38,14 +38,63 @@ const bool SENSOR_ACTIVO = HIGH;
 #include <Stepper.h>
 
 const int pasosPorVuelta = 2048;
-const int pasos90Grados  = 1024;
+const int pasos90Grados  = pasosPorVuelta / 4;
+const int pasos180Grados = pasosPorVuelta / 2;
 
 // Pines de bobinas del stepper
-Stepper motor(pasosPorVuelta, 6, 5, 3, 4);
+const int phasePins[4] = {6, 5, 3, 4};
 
-// Para que cada movimiento de 90° sea aprox 1 segundo.
-// Si pierde pasos, baja a 10 o 12.
-int velocidadStepper = 10;
+// Un objeto por motor permite cambiar el orden de fases sin recablear.
+// Todos usan los mismos pines fisicos; SR3 selecciona que ULN2003 queda activo.
+Stepper motor1(pasosPorVuelta, phasePins[0], phasePins[1], phasePins[2], phasePins[3]);
+Stepper motor2(pasosPorVuelta, phasePins[0], phasePins[1], phasePins[2], phasePins[3]);
+Stepper motor3(pasosPorVuelta, phasePins[0], phasePins[1], phasePins[2], phasePins[3]);
+Stepper motor4(pasosPorVuelta, phasePins[0], phasePins[1], phasePins[2], phasePins[3]);
+
+// Si no termina el giro o pierde pasos con carga, baja la velocidad.
+int velocidadStepper = 8;
+
+// Cada motor comparte los mismos pines de fase y se selecciona con SR3.
+const byte seleccionStepper[4] = {
+  B00000001,  // M1
+  B00000010,  // M2
+  B00000100,  // M3
+  B00001000   // M4 - referencia
+};
+
+int steps180PorMotor[4] = {
+  pasos180Grados,  // M1
+  pasos180Grados,  // M2
+  pasos180Grados,  // M3
+  pasos180Grados   // M4
+};
+
+int direccionPorMotor[4] = {
+  1,   // M1
+  -1,   // M2
+  1,   // M3
+  1    // M4
+};
+
+const int stepsPruebaCalibracion[4] = {512, 1024, 2048, 4096};
+const int delayFaseLenta = 400;
+const int ciclosFaseLenta = 2;
+
+// Variantes para diagnosticar orden de fases.
+// Los valores son indices dentro de phasePins: 0=IN1, 1=IN2, 2=IN3, 3=IN4.
+const byte ordenesFase[4][4] = {
+  {0, 1, 2, 3},  // IN1, IN2, IN3, IN4
+  {0, 2, 1, 3},  // IN1, IN3, IN2, IN4
+  {0, 1, 3, 2},  // IN1, IN2, IN4, IN3
+  {3, 2, 1, 0}   // IN4, IN3, IN2, IN1
+};
+
+const byte ordenFasePorMotor[4] = {
+  0,  // M1
+  0,  // M2
+  0,  // M3
+  0   // M4 referencia
+};
 
 // =====================================================
 // TIEMPOS
@@ -109,7 +158,10 @@ void setup()
   servoClasificador.attach(pinServo);
   servoClasificador.write(SERVO_CENTRO);
 
-  motor.setSpeed(velocidadStepper);
+  motor1.setSpeed(velocidadStepper);
+  motor2.setSpeed(velocidadStepper);
+  motor3.setSpeed(velocidadStepper);
+  motor4.setSpeed(velocidadStepper);
 
   apagarBobinasStepper();
 
@@ -132,7 +184,7 @@ void loop()
 }
 
 // =====================================================
-// REVISAR SENSOR A5
+// REVISAR SENSOR A0
 // =====================================================
 void revisarSensorInPlace()
 {
@@ -141,7 +193,7 @@ void revisarSensorInPlace()
 
   bool inPlaceActual = digitalRead(pinInPlace);
 
-  // Detectar flanco: antes no estaba activo, ahora sí
+  // Detectar flanco: antes no estaba activo, ahora si
   if (inPlaceActual == SENSOR_ACTIVO && inPlaceAnterior == false)
   {
     Serial.println("IN PLACE");
@@ -171,9 +223,16 @@ void leerComandosSerial()
     else if (dato == 'k') { ackFoto(); }
     else if (dato == 'b') { servoPos(true);  }
     else if (dato == 'm') { servoPos(false); }
-    else if (dato == 's') { ejecutarSecuenciaSteppers90(); }
+    else if (dato == 's') { ejecutarSecuenciaSteppers180(); }
     else if (dato == 'x') { apagarTodoSeguro(); resetearCiclo(); Serial.println("APAGADO"); }
     else if (dato == 'p') { probarRegistro3(); }
+    else if (dato == 'f') { probarFasesLentasTodos(); }
+    else if (dato == 'c') { probarCalibracionStepsTodos(); }
+    else if (dato == 'v') { probarVariantesFaseTodos(); }
+    else if (dato == '1') { moverStepperDiagnostico(0); }
+    else if (dato == '2') { moverStepperDiagnostico(1); }
+    else if (dato == '3') { moverStepperDiagnostico(2); }
+    else if (dato == '4') { moverStepperDiagnostico(3); }
   }
 }
 
@@ -213,7 +272,7 @@ void iniciarSecuenciaFotos()
 }
 
 // =====================================================
-// ACK DE FOTO → AVANZAR LUZ
+// ACK DE FOTO -> AVANZAR LUZ
 // =====================================================
 void ackFoto()
 {
@@ -289,14 +348,12 @@ void servoPos(bool buena)
 
   servoClasificador.write(angulo);
 
-  if (buena) Serial.println("SERVO_BUENA");
-  else       Serial.println("SERVO_MALA");
 }
 
 // =====================================================
 // STEPPERS
 // =====================================================
-void ejecutarSecuenciaSteppers90()
+void ejecutarSecuenciaSteppers180()
 {
   if (!cicloEnProceso) return;
 
@@ -312,79 +369,15 @@ void ejecutarSecuenciaSteppers90()
 
   delay(delayAntesDriver);
 
-  // =====================================================
-  // DRIVER 1: salida física 1 del SR3
-  // =====================================================
-  estadoReg3 = B00000001;
-  actualizarSalidas();
+  for (int i = 0; i < 4; i++)
+  {
+    moverStepperSeleccionado(i, steps180PorMotor[i]);
 
-  delay(delayDriverEstable);
-
-  motor.step(pasos90Grados);
-
-  delay(delayDespuesMotor);
-
-  apagarBobinasStepper();
-
-  estadoReg3 = B00000000;
-  actualizarSalidas();
-
-  delay(delayEntreSteppers);
-
-  // =====================================================
-  // DRIVER 2: salida física 2 del SR3
-  // =====================================================
-  estadoReg3 = B00000010;
-  actualizarSalidas();
-
-  delay(delayDriverEstable);
-
-  motor.step(pasos90Grados);
-
-  delay(delayDespuesMotor);
-
-  apagarBobinasStepper();
-
-  estadoReg3 = B00000000;
-  actualizarSalidas();
-
-  delay(delayEntreSteppers);
-
-  // =====================================================
-  // DRIVER 3: salida física 3 del SR3
-  // =====================================================
-  estadoReg3 = B00000100;
-  actualizarSalidas();
-
-  delay(delayDriverEstable);
-
-  motor.step(pasos90Grados);
-
-  delay(delayDespuesMotor);
-
-  apagarBobinasStepper();
-
-  estadoReg3 = B00000000;
-  actualizarSalidas();
-
-  delay(delayEntreSteppers);
-
-  // =====================================================
-  // DRIVER 4: salida física 4 del SR3
-  // =====================================================
-  estadoReg3 = B00001000;
-  actualizarSalidas();
-
-  delay(delayDriverEstable);
-
-  motor.step(pasos90Grados);
-
-  delay(delayDespuesMotor);
-
-  apagarBobinasStepper();
-
-  estadoReg3 = B00000000;
-  actualizarSalidas();
+    if (i < 3)
+    {
+      delay(delayEntreSteppers);
+    }
+  }
 
   apagarTodoSeguro();
 
@@ -394,8 +387,223 @@ void ejecutarSecuenciaSteppers90()
 }
 
 // =====================================================
+// MOVER UN STEPPER SELECCIONADO POR SR3
+// =====================================================
+void moverStepperSeleccionado(int indiceMotor, int steps)
+{
+  if (indiceMotor < 0 || indiceMotor >= 4) return;
+
+  apagarBobinasStepper();
+
+  estadoReg3 = seleccionStepper[indiceMotor];
+  actualizarSalidas();
+
+  delay(delayDriverEstable);
+
+  setSpeedMotor(indiceMotor, velocidadStepper);
+  stepMotor(indiceMotor, steps * direccionPorMotor[indiceMotor]);
+
+  delay(delayDespuesMotor);
+
+  apagarBobinasStepper();
+
+  estadoReg3 = B00000000;
+  actualizarSalidas();
+}
+
+void setSpeedMotor(int indiceMotor, int velocidad)
+{
+  if      (indiceMotor == 0) motor1.setSpeed(velocidad);
+  else if (indiceMotor == 1) motor2.setSpeed(velocidad);
+  else if (indiceMotor == 2) motor3.setSpeed(velocidad);
+  else if (indiceMotor == 3) motor4.setSpeed(velocidad);
+}
+
+void stepMotor(int indiceMotor, int steps)
+{
+  if      (indiceMotor == 0) motor1.step(steps);
+  else if (indiceMotor == 1) motor2.step(steps);
+  else if (indiceMotor == 2) motor3.step(steps);
+  else if (indiceMotor == 3) motor4.step(steps);
+}
+
+// =====================================================
+// TEST INDIVIDUAL DE 180 GRADOS CALIBRADOS
+// 1,2,3,4 = mueve solo ese motor con steps180PorMotor[]
+// =====================================================
+void moverStepperDiagnostico(int indiceMotor)
+{
+  estadoReg1 = B00000000;
+  estadoReg2 = B00000000;
+  estadoReg3 = B00000000;
+  actualizarSalidas();
+
+  moverStepperSeleccionado(indiceMotor, steps180PorMotor[indiceMotor]);
+
+  apagarTodoSeguro();
+  Serial.println("TEST_MOTOR_LISTO");
+}
+
+// =====================================================
+// TEST LENTO DE FASES / LEDS ULN2003
+// f = prueba M1, M2, M3, M4 con 400 ms por fase
+// Secuencia: IN1, IN1+IN2, IN2, IN2+IN3, ...
+// =====================================================
+void probarFasesLentasTodos()
+{
+  estadoReg1 = B00000000;
+  estadoReg2 = B00000000;
+
+  for (int i = 0; i < 4; i++)
+  {
+    probarFasesLentasMotor(i);
+    delay(1000);
+  }
+
+  apagarTodoSeguro();
+  Serial.println("FASES_LENTAS_LISTAS");
+}
+
+void probarFasesLentasMotor(int indiceMotor)
+{
+  const byte fases[8][4] = {
+    {HIGH, LOW,  LOW,  LOW },
+    {HIGH, HIGH, LOW,  LOW },
+    {LOW,  HIGH, LOW,  LOW },
+    {LOW,  HIGH, HIGH, LOW },
+    {LOW,  LOW,  HIGH, LOW },
+    {LOW,  LOW,  HIGH, HIGH},
+    {LOW,  LOW,  LOW,  HIGH},
+    {HIGH, LOW,  LOW,  HIGH}
+  };
+
+  apagarBobinasStepper();
+
+  estadoReg3 = seleccionStepper[indiceMotor];
+  actualizarSalidas();
+
+  Serial.print("FASES_M");
+  Serial.println(indiceMotor + 1);
+
+  delay(delayDriverEstable);
+
+  for (int ciclo = 0; ciclo < ciclosFaseLenta; ciclo++)
+  {
+    for (int fase = 0; fase < 8; fase++)
+    {
+      Serial.print("M");
+      Serial.print(indiceMotor + 1);
+      Serial.print(" FASE ");
+      Serial.println(fase + 1);
+
+      escribirFase(fases[fase], ordenFasePorMotor[indiceMotor]);
+
+      delay(delayFaseLenta);
+    }
+  }
+
+  apagarBobinasStepper();
+
+  estadoReg3 = B00000000;
+  actualizarSalidas();
+}
+
+void escribirFase(const byte fase[4], byte ordenIdx)
+{
+  if (ordenIdx >= 4) ordenIdx = 0;
+
+  for (int pin = 0; pin < 4; pin++)
+  {
+    digitalWrite(phasePins[pin], LOW);
+  }
+
+  for (int faseIdx = 0; faseIdx < 4; faseIdx++)
+  {
+    digitalWrite(phasePins[ordenesFase[ordenIdx][faseIdx]], fase[faseIdx]);
+  }
+}
+
+// =====================================================
+// TEST DE VARIANTES DE ORDEN DE FASE
+// v = prueba cada motor con los 4 ordenes definidos arriba
+// =====================================================
+void probarVariantesFaseTodos()
+{
+  const byte fases[8][4] = {
+    {HIGH, LOW,  LOW,  LOW },
+    {HIGH, HIGH, LOW,  LOW },
+    {LOW,  HIGH, LOW,  LOW },
+    {LOW,  HIGH, HIGH, LOW },
+    {LOW,  LOW,  HIGH, LOW },
+    {LOW,  LOW,  HIGH, HIGH},
+    {LOW,  LOW,  LOW,  HIGH},
+    {HIGH, LOW,  LOW,  HIGH}
+  };
+
+  estadoReg1 = B00000000;
+  estadoReg2 = B00000000;
+  actualizarSalidas();
+
+  for (int motorIdx = 0; motorIdx < 4; motorIdx++)
+  {
+    for (int ordenIdx = 0; ordenIdx < 4; ordenIdx++)
+    {
+      apagarBobinasStepper();
+
+      estadoReg3 = seleccionStepper[motorIdx];
+      actualizarSalidas();
+
+      Serial.print("M");
+      Serial.print(motorIdx + 1);
+      Serial.print(" ORDEN_FASE_");
+      Serial.println(ordenIdx + 1);
+
+      delay(delayDriverEstable);
+
+      for (int fase = 0; fase < 8; fase++)
+      {
+        escribirFase(fases[fase], ordenIdx);
+        delay(delayFaseLenta);
+      }
+
+      apagarBobinasStepper();
+      estadoReg3 = B00000000;
+      actualizarSalidas();
+      delay(1000);
+    }
+  }
+
+  apagarTodoSeguro();
+  Serial.println("VARIANTES_FASE_LISTAS");
+}
+
+// =====================================================
+// TEST DE STEPS POR MOTOR
+// c = M1..M4 con 512, 1024, 2048, 4096 steps
+// Registrar fisicamente cuanto gira cada motor.
+// =====================================================
+void probarCalibracionStepsTodos()
+{
+  estadoReg1 = B00000000;
+  estadoReg2 = B00000000;
+  actualizarSalidas();
+
+  for (int motorIdx = 0; motorIdx < 4; motorIdx++)
+  {
+    for (int pruebaIdx = 0; pruebaIdx < 4; pruebaIdx++)
+    {
+      moverStepperSeleccionado(motorIdx, stepsPruebaCalibracion[pruebaIdx]);
+      delay(1500);
+    }
+  }
+
+  apagarTodoSeguro();
+  Serial.println("CALIBRACION_STEPS_LISTA");
+}
+
+// =====================================================
 // PRUEBA REGISTRO 3
-// p = prueba automática SR3 salida 1 a 8
+// p = prueba automatica SR3 salida 1 a 8
 // =====================================================
 void probarRegistro3()
 {
@@ -474,7 +682,7 @@ void actualizarSalidas()
 // =====================================================
 // ENVIAR 24 BITS
 // =====================================================
-// Cadena física:
+// Cadena fisica:
 // Arduino -> SR1 -> SR2 -> SR3
 //
 // Para que reg3 llegue al tercer chip,
