@@ -63,10 +63,10 @@ const byte seleccionStepper[4] = {
 };
 
 int steps180PorMotor[4] = {
-  pasos180Grados,  // M1
-  pasos180Grados,  // M2
-  pasos180Grados,  // M3
-  pasos180Grados   // M4
+  1024,            // M1
+  1024,  // M2
+  1024,  // M3
+  1024             // M4
 };
 
 int direccionPorMotor[4] = {
