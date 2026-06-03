@@ -52,7 +52,7 @@ Stepper motor3(pasosPorVuelta, phasePins[0], phasePins[1], phasePins[2], phasePi
 Stepper motor4(pasosPorVuelta, phasePins[0], phasePins[1], phasePins[2], phasePins[3]);
 
 // Si no termina el giro o pierde pasos con carga, baja la velocidad.
-int velocidadStepper = 8;
+int velocidadStepper = 4;
 
 // Cada motor comparte los mismos pines de fase y se selecciona con SR3.
 const byte seleccionStepper[4] = {
@@ -129,6 +129,13 @@ bool cicloEnProceso   = false;
 bool inPlaceAnterior  = false;
 
 // =====================================================
+// PROTOTIPOS
+// =====================================================
+void moverStepperSeleccionado(int indiceMotor, int steps);
+void apagarTodoSeguro(bool centrarServo);
+void ejecutarCorreccionSerial();
+
+// =====================================================
 // SETUP
 // =====================================================
 void setup()
@@ -156,7 +163,7 @@ void setup()
   Serial.begin(9600);
 
   servoClasificador.attach(pinServo);
-  servoClasificador.write(SERVO_CENTRO);
+  servoClasificador.write(120);
 
   motor1.setSpeed(velocidadStepper);
   motor2.setSpeed(velocidadStepper);
@@ -214,6 +221,12 @@ void leerComandosSerial()
   {
     char dato = Serial.read();
 
+    if (dato == 'R')
+    {
+      ejecutarCorreccionSerial();
+      return;
+    }
+
     delay(5);
     while (Serial.available() > 0) Serial.read();
 
@@ -224,7 +237,8 @@ void leerComandosSerial()
     else if (dato == 'b') { servoPos(true);  }
     else if (dato == 'm') { servoPos(false); }
     else if (dato == 's') { ejecutarSecuenciaSteppers180(); }
-    else if (dato == 'x') { apagarTodoSeguro(); resetearCiclo(); Serial.println("APAGADO"); }
+    else if (dato == 'o') { apagarTodoSeguro(false); Serial.println("LUCES_APAGADAS"); }
+    else if (dato == 'x') { apagarTodoSeguro(true); resetearCiclo(); Serial.println("APAGADO"); }
     else if (dato == 'p') { probarRegistro3(); }
     else if (dato == 'f') { probarFasesLentasTodos(); }
     else if (dato == 'c') { probarCalibracionStepsTodos(); }
@@ -234,6 +248,43 @@ void leerComandosSerial()
     else if (dato == '3') { moverStepperDiagnostico(2); }
     else if (dato == '4') { moverStepperDiagnostico(3); }
   }
+}
+
+// =====================================================
+// CORRECCION VISUAL POR PYTHON
+// Comando:
+//   R motor steps
+// Ejemplo:
+//   R 1 -12
+// motor: 1..4
+// steps: pasos relativos, puede ser negativo
+// =====================================================
+void ejecutarCorreccionSerial()
+{
+  int motor = Serial.parseInt();
+  int steps = Serial.parseInt();
+
+  while (Serial.available() > 0) Serial.read();
+
+  if (motor < 1 || motor > 4 || steps == 0)
+  {
+    Serial.println("CORRECCION_INVALIDA");
+    return;
+  }
+
+  estadoReg1 = B00000000;
+  estadoReg2 = B00000000;
+  estadoReg3 = B00000000;
+  actualizarSalidas();
+
+  moverStepperSeleccionado(motor - 1, steps);
+
+  apagarTodoSeguro(false);
+
+  Serial.print("CORRECCION_LISTA M");
+  Serial.print(motor);
+  Serial.print(" ");
+  Serial.println(steps);
 }
 
 // =====================================================
@@ -253,7 +304,7 @@ void resetearCiclo()
 
   inPlaceAnterior = false;
 
-  apagarTodoSeguro();
+  apagarTodoSeguro(false);
 
   Serial.println("LISTO");
 }
@@ -379,7 +430,7 @@ void ejecutarSecuenciaSteppers180()
     }
   }
 
-  apagarTodoSeguro();
+  apagarTodoSeguro(false);
 
   Serial.println("STEPPERS_LISTOS");
 
@@ -440,7 +491,7 @@ void moverStepperDiagnostico(int indiceMotor)
 
   moverStepperSeleccionado(indiceMotor, steps180PorMotor[indiceMotor]);
 
-  apagarTodoSeguro();
+  apagarTodoSeguro(false);
   Serial.println("TEST_MOTOR_LISTO");
 }
 
@@ -460,7 +511,7 @@ void probarFasesLentasTodos()
     delay(1000);
   }
 
-  apagarTodoSeguro();
+  apagarTodoSeguro(false);
   Serial.println("FASES_LENTAS_LISTAS");
 }
 
@@ -573,7 +624,7 @@ void probarVariantesFaseTodos()
     }
   }
 
-  apagarTodoSeguro();
+  apagarTodoSeguro(false);
   Serial.println("VARIANTES_FASE_LISTAS");
 }
 
@@ -597,7 +648,7 @@ void probarCalibracionStepsTodos()
     }
   }
 
-  apagarTodoSeguro();
+  apagarTodoSeguro(false);
   Serial.println("CALIBRACION_STEPS_LISTA");
 }
 
@@ -654,10 +705,14 @@ void apagarBobinasStepper()
 // =====================================================
 // APAGADO SEGURO TOTAL
 // =====================================================
-void apagarTodoSeguro()
+void apagarTodoSeguro(bool centrarServo = false)
 {
   apagarBobinasStepper();
-  servoClasificador.write(SERVO_CENTRO);
+
+  if (centrarServo)
+  {
+    servoClasificador.write(SERVO_CENTRO);
+  }
 
   estadoReg1 = B00000000;
   estadoReg2 = B00000000;

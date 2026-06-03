@@ -31,15 +31,25 @@ import queue
 import random
 import threading
 import traceback
+from pathlib import Path
 
+import joblib
 import numpy as np
 import serial
 from serial.tools import list_ports
 
-from camera_utils  import open_camera, set_camera, warmup_camera, capture_gray_frame, release_camera
+from camera_utils  import open_camera, set_camera, warmup_camera, read_frame, capture_gray_frame, release_camera
 from roi_utils     import croptoroi
 from features      import basic_features
 from glare         import glare_stats
+from motor_calibration import (
+    calibrar_motores_con_fotos,
+    calibrar_motores,
+    imprimir_resultado_calibracion,
+    mostrar_fotos_calibracion,
+    mostrar_recortes_calibracion,
+    mostrar_resultado_calibracion,
+)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -50,17 +60,20 @@ BAUDRATE = 9600
 # Un ROI por estacion: (x, y, w, h)
 # Ajusta cada tupla con las coordenadas reales de cada estacion.
 ROIS_POR_ESTACION = [
-    (465, 364, 108, 100),  # Estacion 1
-    (294, 341, 100, 103),  # Estacion 2
-    (281, 116, 85, 87),  # Estacion 3
-    (146, 120, 89, 88),  # Estacion 4
+    (144, 64, 92, 92),  # Estacion 1
+    (277, 58, 103, 94),  # Estacion 2
+    (300, 284, 102, 98),  # Estacion 3
+    (465, 307, 107, 108),  # Estacion 4
 ]
+
 
 NUM_ESTACIONES = 4
 LUCES_POR_EST  = 4
+LUZ_CALIBRACION_POR_ESTACION = [0, 0, 1, 0]
 
 SERVO_SETTLE_S    = 0.5
 STEPPER_TIMEOUT_S = 30.0
+MODEL_PATH = Path(__file__).resolve().parents[3] / "golf_ball_rf_model.pkl"
 
 ARDUINO_KEYWORDS = ("arduino", "ch340", "wch", "usb serial", "usb-serial")
 
@@ -119,6 +132,36 @@ def clasificar(vec_derivado: np.ndarray) -> bool:
       return bool(modelo.predict([vec_derivado])[0])
     """
     return random.choice([True, False])
+
+
+_modelo_bundle = None
+
+
+def cargar_modelo():
+    global _modelo_bundle
+
+    if _modelo_bundle is None:
+        if not MODEL_PATH.exists():
+            raise FileNotFoundError(f"No existe el modelo entrenado: {MODEL_PATH}")
+
+        _modelo_bundle = joblib.load(MODEL_PATH)
+
+    return _modelo_bundle
+
+
+def clasificar(vec_derivado: np.ndarray) -> bool:
+    """True = BUENA, False = MALA."""
+    bundle = cargar_modelo()
+    modelo = bundle["model"]
+    threshold = float(bundle.get("good_probability_threshold", 0.5))
+
+    x = np.asarray(vec_derivado, dtype=np.float32).reshape(1, -1)
+
+    if hasattr(modelo, "predict_proba"):
+        proba_buena = float(modelo.predict_proba(x)[0][1])
+        return proba_buena >= threshold
+
+    return bool(modelo.predict(x)[0])
 
 
 # ─────────────────────────────────────────────────────────────
@@ -258,6 +301,8 @@ def main():
 
         esperando_steppers = False
         t_inicio_steppers = None
+        calibrando_con_luces = False
+        frames_calibracion_luces = [None] * NUM_ESTACIONES
 
         def reset_ciclo():
             nonlocal matrices, esperando_steppers, t_inicio_steppers
@@ -282,9 +327,29 @@ def main():
             cmd = _leer_cmd()
 
             if cmd == "salir":
-                print("Saliendo. Mandando 'x' al Arduino...")
-                ser.write(b"x")
+                print("Saliendo. Mandando 'o' al Arduino...")
+                ser.write(b"o")
                 break
+
+            if cmd == "calibrar":
+                frame = read_frame(cam)
+                resultado_cal = calibrar_motores(
+                    frame,
+                    ROIS_POR_ESTACION,
+                    expand_scale=1.25,
+                    tolerance_px=8.0,
+                )
+                imprimir_resultado_calibracion(resultado_cal)
+                mostrar_resultado_calibracion(frame, resultado_cal)
+                mostrar_recortes_calibracion(frame, resultado_cal)
+
+            if cmd == "calibrar_luces":
+                calibrando_con_luces = True
+                frames_calibracion_luces = [None] * NUM_ESTACIONES
+                ser.reset_input_buffer()
+                print("Calibracion con luces: enviando 'g'.")
+                print("Capturare solo la luz 1 de cada estacion y hare ACK al resto.")
+                ser.write(b"g")
 
             # ─────────────────────────────────────────────
             # DATOS DEL ARDUINO
@@ -297,6 +362,22 @@ def main():
                 # FIN DE FOTOS: Arduino manda 'z'
                 # ─────────────────────────────────────
                 if c == "z":
+                    if calibrando_con_luces:
+                        print("[Arduino] Fotos de calibracion listas.")
+
+                        resultado_cal = calibrar_motores_con_fotos(
+                            frames_calibracion_luces,
+                            ROIS_POR_ESTACION,
+                            expand_scale=1.25,
+                            tolerance_px=8.0,
+                        )
+                        imprimir_resultado_calibracion(resultado_cal)
+                        mostrar_fotos_calibracion(frames_calibracion_luces, resultado_cal)
+
+                        calibrando_con_luces = False
+                        ser.write(b"o")
+                        continue
+
                     print("[Arduino] FOTOS_LISTAS")
 
                     procesar_fotos_listas(ser, memoria)
@@ -314,6 +395,24 @@ def main():
                         continue
 
                     estacion, luz, paso = decoded
+
+                    if calibrando_con_luces:
+                        luz_objetivo = LUZ_CALIBRACION_POR_ESTACION[estacion]
+
+                        if luz == luz_objetivo:
+                            print(
+                                f"[Calibracion] Capturando E{estacion + 1} "
+                                f"con L{luz + 1} (paso {paso:02d})"
+                            )
+                            frames_calibracion_luces[estacion] = read_frame(cam)
+                        else:
+                            print(
+                                f"[Calibracion] Saltando E{estacion + 1} "
+                                f"L{luz + 1} (ACK)"
+                            )
+
+                        ser.write(b"k")
+                        continue
 
                     print(
                         f"[Paso {paso:02d}] "
@@ -402,8 +501,8 @@ def main():
             if esperando_steppers and t_inicio_steppers is not None:
                 if time.time() - t_inicio_steppers > STEPPER_TIMEOUT_S:
                     print("WARNING: timeout esperando STEPPERS_LISTOS.")
-                    print("Mandando 'x' por seguridad.")
-                    ser.write(b"x")
+                    print("Mandando 'o' por seguridad.")
+                    ser.write(b"o")
 
                     esperando_steppers = False
                     t_inicio_steppers = None
@@ -422,7 +521,7 @@ def main():
     finally:
         if ser and ser.is_open:
             try:
-                ser.write(b"x")
+                ser.write(b"o")
             except Exception:
                 pass
 

@@ -290,6 +290,8 @@ def main():
         time.sleep(2)
         ser.reset_input_buffer()
         ser.reset_output_buffer()
+        ser.write(b"b")
+        time.sleep(0.5)
         print("Serial listo.")
 
         print("\nCaptura dataset con luces")
