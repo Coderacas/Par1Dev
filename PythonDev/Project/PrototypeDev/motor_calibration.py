@@ -416,9 +416,6 @@ def imprimir_resultado_calibracion(result: MotorCalibrationResult) -> None:
     print("\n=== Calibracion visual de motores ===")
 
     for d in result.detections:
-        if d.station > 3:
-            continue
-
         if not d.ok:
             print(f"  Estacion {d.station}: SIN DETECCION ({d.reason})")
             continue
@@ -637,9 +634,6 @@ def mostrar_recortes_calibracion_con_fotos(
     crops = []
 
     for d in result.detections:
-        if d.station > 3:
-            continue
-
         idx = d.station - 1
 
         if idx >= len(frames_por_estacion) or frames_por_estacion[idx] is None:

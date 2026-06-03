@@ -227,3 +227,248 @@ La siguiente version sera la integracion total del sistema. Para llegar a esa ve
 - probablemente agregar mas sensores al Arduino para confirmar posicion y seguridad mecanica
 - crear un script dedicado para capturar datos de training desde el prototipo real
 - guardar las capturas/features con etiqueta de pelota buena o mala para alimentar el dataset
+
+## V6
+
+La version V6 consolida el prototipo como un sistema integrado de inspeccion,
+clasificacion, calibracion visual y correccion mecanica. Los archivos centrales
+de esta etapa estan en:
+
+```text
+PythonDev/Project/PrototypeDev/main.py
+PythonDev/Project/PrototypeDev/calibrar_motores_luces.py
+PythonDev/Project/PrototypeDev/motor_calibration.py
+ArduinoControl/ArduinoFinalIntegration/FinalIntegration/FinalIntegration.ino
+ML Model/train_model.py
+```
+
+### Clasificacion con machine learning
+
+- `main.py` ya no depende del clasificador aleatorio.
+- El modelo entrenado se carga desde `golf_ball_rf_model.pkl`.
+- La funcion `clasificar()` usa el modelo con `predict_proba` cuando esta disponible.
+- El umbral de probabilidad para pelota buena se guarda junto con el modelo.
+- La memoria de estado conserva una pelota como `MALA` si alguna estacion previa o actual la marco como mala.
+- El dataset principal de entrenamiento se encuentra en:
+
+```text
+PythonDev/Project/PrototypeDev/data/features_dataset_ml.csv
+```
+
+Para entrenar el modelo:
+
+```powershell
+python "ML Model\train_model.py"
+```
+
+El entrenamiento genera/actualiza el bundle del modelo, que despues consume
+`main.py`.
+
+### Captura de features
+
+El sistema sigue usando 4 estaciones y 4 luces por estacion:
+
+```text
+NUM_ESTACIONES = 4
+LUCES_POR_EST = 4
+```
+
+Cada estacion usa su ROI definido en `ROIS_POR_ESTACION` dentro de `main.py`.
+Los scripts que capturan features o calibran usan esos ROIs como referencia
+central para evitar desalineacion entre inspeccion y calibracion.
+
+Las features por ROI incluyen:
+
+- intensidad media, desviacion, minimo y maximo
+- gradiente medio, desviacion y maximo
+- laplaciano absoluto medio y desviacion
+- porcentaje de glare
+
+Por estacion se derivan estadisticas sobre las 4 luces:
+
+```text
+std, mean, max, min
+```
+
+### Orden fisico de luces
+
+En V6 se corrigio el mapeo fisico de luces. El Arduino envia los pasos `1..16`,
+pero el orden fisico real no empieza en la estacion 1:
+
+```text
+pasos  1-4  -> estacion 4
+pasos  5-8  -> estacion 3
+pasos  9-12 -> estacion 2
+pasos 13-16 -> estacion 1
+```
+
+La funcion `decodificar_paso()` en `main.py` ya toma esto en cuenta. Por eso,
+cualquier script que importe esa funcion queda alineado con el orden real de
+las luces.
+
+### Calibracion visual de motores
+
+Se agrego una calibracion independiente en:
+
+```text
+PythonDev/Project/PrototypeDev/calibrar_motores_luces.py
+```
+
+Uso manual:
+
+```powershell
+python PythonDev\Project\PrototypeDev\calibrar_motores_luces.py
+```
+
+Dentro del script:
+
+```text
+calibrar
+```
+
+El script:
+
+- prende las luces usando el Arduino
+- captura L1-L4 por cada estacion
+- superpone las 4 fotos de cada estacion con 25% cada una
+- simula una iluminacion con las 4 luces encendidas
+- detecta la geometria de la pelota dentro del ROI
+- calcula el error visual respecto al centro del ROI
+- dibuja los ROIs y la linea de error para revision manual
+- manda correcciones al Arduino con comandos `R motor steps`
+
+El comando de correccion serial tiene la forma:
+
+```text
+R 1 -120
+R 2 80
+R 3 150
+R 4 -200
+```
+
+El Arduino responde con:
+
+```text
+CORRECCION_LISTA M1 -120
+```
+
+### Reglas actuales de correccion
+
+La calibracion no usa PID completo. Es una correccion proporcional discreta:
+
+```text
+error_px -> steps = abs(error_px) * steps_per_pixel
+```
+
+Con:
+
+- umbral minimo por estacion
+- minimo de pasos
+- maximo de pasos
+- signo configurable por motor
+- eje configurable por estacion
+
+Ejes actuales:
+
+```text
+E1 -> x
+E2 -> x
+E3 -> y
+E4 -> x
+```
+
+Esto corresponde al movimiento real de los rieles.
+
+### Calibracion automatica dentro de `main.py`
+
+`main.py` ahora puede hacer una calibracion automatica cada cierto numero de
+ciclos completos:
+
+```text
+AUTO_CALIBRATION_EVERY_CYCLES = 5
+```
+
+Flujo:
+
+1. El sistema inspecciona normalmente.
+2. Cuando Arduino reporta `STEPPERS_LISTOS`, Python rota la memoria.
+3. Cada 5 ciclos se marca una calibracion pendiente.
+4. En el siguiente `IN PLACE`, Python primero ejecuta calibracion visual.
+5. Aplica correcciones con `R motor steps`.
+6. Luego inicia la captura normal de esa misma pelota.
+
+La calibracion automatica no despliega fotos y no debe mezclar datos con el
+ciclo normal de inspeccion. Usa buffers separados para no contaminar las
+matrices de features.
+
+### Arduino V6
+
+El Arduino integrado esta en:
+
+```text
+ArduinoControl/ArduinoFinalIntegration/FinalIntegration/FinalIntegration.ino
+```
+
+Funciones principales:
+
+- control de luces con registros 74HC595
+- handshake de captura con `g`, pasos `1..G`, `k` y `z`
+- control de steppers con comando `s`
+- correccion visual por comando `R motor steps`
+- apagado de luces con `o`
+- apagado/reset con `x`
+- servo clasificador con comandos `b` y `m`
+
+Comandos seriales relevantes:
+
+```text
+g              iniciar secuencia de luces/fotos
+k              ACK de foto capturada
+b              servo a buena
+m              servo a mala
+s              mover steppers
+o              apagar luces/salidas sin centrar servo
+x              apagado/reset seguro
+R motor steps  correccion relativa de un motor
+```
+
+### Servo clasificador
+
+El servo clasificador usa:
+
+```text
+SERVO_BUENA = 120
+SERVO_MALA  = 60
+```
+
+Para evitar que el servo se quede pegado al ir hacia `MALA`, se agrego una
+pre-carga:
+
+```text
+SERVO_PRE_MALA_KICK = SERVO_BUENA + 10
+SERVO_PRE_MALA_KICK_MS = 90
+```
+
+Cuando el sistema manda `m`, el servo primero se mueve un poco mas hacia el
+lado de buena y despues cae hacia mala. Esto ayuda a despegar la mecanica si
+venia cargada.
+
+### Estado de V6
+
+V6 ya integra:
+
+- clasificacion con modelo entrenado
+- captura multi-luz por estacion
+- memoria de pelota por estacion
+- servo para separar buena/mala
+- steppers controlados desde Arduino
+- calibracion visual independiente
+- calibracion automatica cada 5 ciclos
+- correccion por pasos desde Python hacia Arduino
+
+Pendientes probables:
+
+- seguir afinando umbrales de correccion con mas pruebas fisicas
+- aumentar el dataset de entrenamiento
+- validar repetibilidad despues de muchas pelotas seguidas
+- documentar valores finales de ROIs y ganancias de calibracion cuando queden congelados

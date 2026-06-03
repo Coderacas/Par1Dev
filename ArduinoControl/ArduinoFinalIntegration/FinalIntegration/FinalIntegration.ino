@@ -15,8 +15,14 @@ const int SERVO_CENTRO = 90;
 const int SERVO_DELTA  = 30;
 const int SERVO_BUENA  = SERVO_CENTRO + SERVO_DELTA;
 const int SERVO_MALA   = SERVO_CENTRO - SERVO_DELTA;
+const int SERVO_PRE_MALA_KICK = SERVO_BUENA + 10;
+const int SERVO_PRE_MALA_KICK_MS = 90;
+const int SERVO_TOQUE_DELTA = 8;
+const int SERVO_TOQUE_MS    = 80;
+const int SERVO_REINTENTO_MS = 120;
 
 Servo servoClasificador;
+int servoAnguloActual = SERVO_BUENA;
 
 // =====================================================
 // SENSOR IN PLACE
@@ -134,6 +140,7 @@ bool inPlaceAnterior  = false;
 void moverStepperSeleccionado(int indiceMotor, int steps);
 void apagarTodoSeguro(bool centrarServo);
 void ejecutarCorreccionSerial();
+void moverServoSuave(int destino);
 
 // =====================================================
 // SETUP
@@ -163,7 +170,7 @@ void setup()
   Serial.begin(9600);
 
   servoClasificador.attach(pinServo);
-  servoClasificador.write(120);
+  servoClasificador.write(servoAnguloActual);
 
   motor1.setSpeed(velocidadStepper);
   motor2.setSpeed(velocidadStepper);
@@ -395,10 +402,36 @@ void apagarTodasLasLuces()
 void servoPos(bool buena)
 {
   int angulo = buena ? SERVO_BUENA : SERVO_MALA;
+  int toque = buena ? angulo - SERVO_TOQUE_DELTA : angulo + SERVO_TOQUE_DELTA;
+
   angulo = constrain(angulo, SERVO_CENTRO - SERVO_DELTA, SERVO_CENTRO + SERVO_DELTA);
+  toque = constrain(toque, SERVO_CENTRO - SERVO_DELTA, SERVO_CENTRO + SERVO_DELTA);
 
+  if (!buena)
+  {
+    servoClasificador.write(constrain(SERVO_PRE_MALA_KICK, 0, 180));
+    delay(SERVO_PRE_MALA_KICK_MS);
+    servoClasificador.write(SERVO_MALA);
+    delay(SERVO_REINTENTO_MS);
+    servoClasificador.write(SERVO_MALA);
+    servoAnguloActual = SERVO_MALA;
+    return;
+  }
+
+  servoClasificador.write(toque);
+  delay(SERVO_TOQUE_MS);
   servoClasificador.write(angulo);
+  delay(SERVO_REINTENTO_MS);
+  servoClasificador.write(angulo);
+  servoAnguloActual = angulo;
 
+}
+
+void moverServoSuave(int destino)
+{
+  destino = constrain(destino, SERVO_CENTRO - SERVO_DELTA, SERVO_CENTRO + SERVO_DELTA);
+  servoClasificador.write(destino);
+  servoAnguloActual = destino;
 }
 
 // =====================================================
@@ -712,6 +745,7 @@ void apagarTodoSeguro(bool centrarServo = false)
   if (centrarServo)
   {
     servoClasificador.write(SERVO_CENTRO);
+    servoAnguloActual = SERVO_CENTRO;
   }
 
   estadoReg1 = B00000000;

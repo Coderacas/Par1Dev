@@ -60,10 +60,10 @@ BAUDRATE = 9600
 # Un ROI por estacion: (x, y, w, h)
 # Ajusta cada tupla con las coordenadas reales de cada estacion.
 ROIS_POR_ESTACION = [
-    (144, 64, 92, 92),  # Estacion 1
-    (277, 58, 103, 94),  # Estacion 2
-    (300, 284, 102, 98),  # Estacion 3
-    (465, 307, 107, 108),  # Estacion 4
+    (145, 70, 93, 92),  # Estacion 1
+    (285, 65, 91, 88),  # Estacion 2
+    (305, 290, 96, 100),  # Estacion 3
+    (471, 315, 109, 98),  # Estacion 4
 ]
 
 
@@ -73,7 +73,55 @@ LUZ_CALIBRACION_POR_ESTACION = [0, 0, 1, 0]
 
 SERVO_SETTLE_S    = 0.5
 STEPPER_TIMEOUT_S = 30.0
+AUTO_CALIBRATION_EVERY_CYCLES = 5
 MODEL_PATH = Path(__file__).resolve().parents[3] / "golf_ball_rf_model.pkl"
+
+CALIBRATION_ERROR_THRESHOLD_PX = 6.0
+CALIBRATION_STEPS_PER_PIXEL = 0.5
+CALIBRATION_MIN_STEPS = 2
+CALIBRATION_MAX_STEPS = 30
+
+CALIBRATION_PARAMS_BY_STATION = {
+    1: {
+        "threshold_px": 6.0,
+        "steps_per_pixel": 9.0,
+        "min_steps": 18,
+        "max_steps": 220,
+    },
+    2: {
+        "threshold_px": 3.0,
+        "steps_per_pixel": 5.9,
+        "min_steps": 18,
+        "max_steps": 220,
+    },
+    3: {
+        "threshold_px": 6.0,
+        "steps_per_pixel": 8.8,
+        "min_steps": 18,
+        "extra_steps": 0,
+        "max_steps": 220,
+    },
+    4: {
+        "threshold_px": 6.0,
+        "steps_per_pixel": 9.0,
+        "min_steps": 18,
+        "max_steps": 220,
+    },
+}
+
+CALIBRATION_AXIS_BY_STATION = {
+    1: "x",
+    2: "x",
+    3: "y",
+    4: "x",
+}
+
+CALIBRATION_SIGN_BY_STATION = {
+    1: 1,
+    2: 1,
+    3: 1,
+    4: 1,
+}
 
 ARDUINO_KEYWORDS = ("arduino", "ch340", "wch", "usb serial", "usb-serial")
 
@@ -164,6 +212,30 @@ def clasificar(vec_derivado: np.ndarray) -> bool:
     return bool(modelo.predict(x)[0])
 
 
+def fusionar_estado(previo, actual):
+    """
+    Mantiene MALA si alguna inspeccion anterior o actual fue mala.
+
+    None  = aun no hay dato para esa posicion
+    True  = BUENA
+    False = MALA
+    """
+    if previo is False or actual is False:
+        return False
+
+    if previo is True or actual is True:
+        return True
+
+    return None
+
+
+def estado_texto(estado):
+    if estado is None:
+        return "-"
+
+    return "BUENA" if estado else "MALA"
+
+
 # ─────────────────────────────────────────────────────────────
 # LECTOR DE STDIN
 # ─────────────────────────────────────────────────────────────
@@ -210,6 +282,12 @@ def decodificar_paso(byte_recibido: bytes):
       '1'-'9' para pasos 1-9
       'A'-'G' para pasos 10-16
 
+    Orden fisico de luces:
+      pasos  1-4  -> estacion 4
+      pasos  5-8  -> estacion 3
+      pasos  9-12 -> estacion 2
+      pasos 13-16 -> estacion 1
+
     Devuelve:
       estacion, luz_en_estacion, paso_global
     """
@@ -224,7 +302,8 @@ def decodificar_paso(byte_recibido: bytes):
 
     paso_idx = paso - 1
 
-    estacion        = paso_idx // LUCES_POR_EST
+    grupo_fisico    = paso_idx // LUCES_POR_EST
+    estacion        = (NUM_ESTACIONES - 1) - grupo_fisico
     luz_en_estacion = paso_idx % LUCES_POR_EST
 
     return estacion, luz_en_estacion, paso
@@ -269,6 +348,104 @@ def procesar_fotos_listas(ser, memoria):
     ser.write(b"s")
 
 
+def combinar_fotos_calibracion(frames_por_luz):
+    frames_combinados = []
+
+    for frames_luces in frames_por_luz:
+        if any(frame is None for frame in frames_luces):
+            frames_combinados.append(None)
+            continue
+
+        base_h, base_w = frames_luces[0].shape[:2]
+        combined = np.zeros_like(frames_luces[0], dtype=np.float32)
+
+        for frame in frames_luces:
+            if frame.shape[:2] != (base_h, base_w):
+                combined = None
+                break
+
+            combined += frame.astype(np.float32) * 0.25
+
+        if combined is None:
+            frames_combinados.append(None)
+        else:
+            frames_combinados.append(np.clip(combined, 0, 255).astype(np.uint8))
+
+    return frames_combinados
+
+
+def calcular_steps_calibracion(station, error_px):
+    params = CALIBRATION_PARAMS_BY_STATION.get(station, {})
+    threshold_px = params.get("threshold_px", CALIBRATION_ERROR_THRESHOLD_PX)
+    steps_per_pixel = params.get("steps_per_pixel", CALIBRATION_STEPS_PER_PIXEL)
+    min_steps = params.get("min_steps", CALIBRATION_MIN_STEPS)
+    max_steps = params.get("max_steps", CALIBRATION_MAX_STEPS)
+    extra_steps = params.get("extra_steps", 0)
+
+    magnitude = abs(float(error_px))
+
+    if magnitude < threshold_px:
+        return 0
+
+    steps = int(round(magnitude * steps_per_pixel)) + extra_steps
+    return max(min_steps, min(max_steps, steps))
+
+
+def esperar_respuesta_correccion(ser, timeout_s=8.0):
+    deadline = time.time() + timeout_s
+
+    while time.time() < deadline:
+        if ser.in_waiting > 0:
+            line = ser.readline().decode("ascii", errors="ignore").strip()
+            if line:
+                print(f"[Arduino] {line}")
+                if "CORRECCION_LISTA" in line or "CORRECCION_INVALIDA" in line:
+                    return line
+
+        time.sleep(0.01)
+
+    print("WARNING: timeout esperando respuesta de correccion.")
+    return ""
+
+
+def enviar_correcciones_calibracion(ser, result):
+    print("\n=== Correcciones Arduino ===")
+    any_sent = False
+
+    for detection in result.detections:
+        station = detection.station
+
+        if station not in CALIBRATION_AXIS_BY_STATION:
+            continue
+
+        if not detection.ok or detection.error_px is None:
+            print(f"  E{station}: sin deteccion, no corrijo.")
+            continue
+
+        axis = CALIBRATION_AXIS_BY_STATION[station]
+        error_value = detection.error_px[0] if axis == "x" else detection.error_px[1]
+        steps = calcular_steps_calibracion(station, error_value)
+
+        if steps == 0:
+            print(f"  E{station}: error {axis}={error_value:+.1f}px dentro de umbral.")
+            continue
+
+        direction = 1 if error_value > 0 else -1
+        signed_steps = direction * steps * CALIBRATION_SIGN_BY_STATION[station]
+        command = f"R {station} {signed_steps}\n"
+
+        print(
+            f"  E{station}: error {axis}={error_value:+.1f}px "
+            f"-> motor {station}, steps {signed_steps:+d}"
+        )
+        ser.write(command.encode("ascii"))
+        esperar_respuesta_correccion(ser)
+        any_sent = True
+
+    if not any_sent:
+        print("  Sin correcciones necesarias.")
+
+
 # ─────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────
@@ -302,7 +479,11 @@ def main():
         esperando_steppers = False
         t_inicio_steppers = None
         calibrando_con_luces = False
-        frames_calibracion_luces = [None] * NUM_ESTACIONES
+        calibracion_auto_pendiente = False
+        ciclos_completados = 0
+        frames_calibracion_luces = [
+            [None] * LUCES_POR_EST for _ in range(NUM_ESTACIONES)
+        ]
 
         def reset_ciclo():
             nonlocal matrices, esperando_steppers, t_inicio_steppers
@@ -345,10 +526,12 @@ def main():
 
             if cmd == "calibrar_luces":
                 calibrando_con_luces = True
-                frames_calibracion_luces = [None] * NUM_ESTACIONES
+                frames_calibracion_luces = [
+                    [None] * LUCES_POR_EST for _ in range(NUM_ESTACIONES)
+                ]
                 ser.reset_input_buffer()
                 print("Calibracion con luces: enviando 'g'.")
-                print("Capturare solo la luz 1 de cada estacion y hare ACK al resto.")
+                print("Capturare L1-L4 por estacion, sin desplegar fotos.")
                 ser.write(b"g")
 
             # ─────────────────────────────────────────────
@@ -364,18 +547,36 @@ def main():
                 if c == "z":
                     if calibrando_con_luces:
                         print("[Arduino] Fotos de calibracion listas.")
+                        frames_combinados = combinar_fotos_calibracion(frames_calibracion_luces)
+                        faltantes = [
+                            idx + 1
+                            for idx, frame in enumerate(frames_combinados)
+                            if frame is None
+                        ]
+                        if faltantes:
+                            print(
+                                "Faltaron fotos de calibracion en: "
+                                + ", ".join(f"E{idx}" for idx in faltantes)
+                            )
+                            calibrando_con_luces = False
+                            ser.write(b"o")
+                            continue
 
                         resultado_cal = calibrar_motores_con_fotos(
-                            frames_calibracion_luces,
+                            frames_combinados,
                             ROIS_POR_ESTACION,
                             expand_scale=1.25,
                             tolerance_px=8.0,
                         )
                         imprimir_resultado_calibracion(resultado_cal)
-                        mostrar_fotos_calibracion(frames_calibracion_luces, resultado_cal)
+                        enviar_correcciones_calibracion(ser, resultado_cal)
 
                         calibrando_con_luces = False
-                        ser.write(b"o")
+                        calibracion_auto_pendiente = False
+                        reset_ciclo()
+                        ser.reset_input_buffer()
+                        print("Calibracion lista. Iniciando captura normal de esta pelota...")
+                        ser.write(b"g")
                         continue
 
                     print("[Arduino] FOTOS_LISTAS")
@@ -397,19 +598,11 @@ def main():
                     estacion, luz, paso = decoded
 
                     if calibrando_con_luces:
-                        luz_objetivo = LUZ_CALIBRACION_POR_ESTACION[estacion]
-
-                        if luz == luz_objetivo:
-                            print(
-                                f"[Calibracion] Capturando E{estacion + 1} "
-                                f"con L{luz + 1} (paso {paso:02d})"
-                            )
-                            frames_calibracion_luces[estacion] = read_frame(cam)
-                        else:
-                            print(
-                                f"[Calibracion] Saltando E{estacion + 1} "
-                                f"L{luz + 1} (ACK)"
-                            )
+                        print(
+                            f"[Calibracion] Capturando E{estacion + 1} "
+                            f"L{luz + 1} (paso {paso:02d})"
+                        )
+                        frames_calibracion_luces[estacion][luz] = read_frame(cam)
 
                         ser.write(b"k")
                         continue
@@ -437,10 +630,13 @@ def main():
                         vec_rf = derivar_features(matrices[estacion])
                         resultado = clasificar(vec_rf)
 
-                        if memoria[estacion] is None:
-                            memoria[estacion] = resultado
-                        else:
-                            memoria[estacion] = memoria[estacion] and resultado
+                        previo = memoria[estacion]
+                        memoria[estacion] = fusionar_estado(previo, resultado)
+                        print(
+                            f"     carry previo={estado_texto(previo)} "
+                            f"actual={estado_texto(resultado)} "
+                            f"final={estado_texto(memoria[estacion])}"
+                        )
 
                         print(
                             f"  → Estación {estacion + 1}: "
@@ -457,6 +653,28 @@ def main():
 
                     if linea:
                         print(f"[Arduino] {linea}")
+
+                    if (
+                        "IN PLACE" in linea
+                        and calibrando_con_luces
+                    ):
+                        print("IN PLACE recibido durante calibracion; lo ignoro.")
+                        continue
+
+                    if (
+                        "IN PLACE" in linea
+                        and not esperando_steppers
+                        and calibracion_auto_pendiente
+                    ):
+                        reset_ciclo()
+                        calibrando_con_luces = True
+                        frames_calibracion_luces = [
+                            [None] * LUCES_POR_EST for _ in range(NUM_ESTACIONES)
+                        ]
+                        ser.reset_input_buffer()
+                        print("IN PLACE detectado. Ejecutando calibracion automatica antes del ciclo normal...")
+                        ser.write(b"g")
+                        continue
 
                     # ─────────────────────────────────────
                     # SENSOR IN PLACE → INICIAR CICLO
@@ -488,6 +706,14 @@ def main():
                         for i, e in enumerate(memoria):
                             estado_txt = "—" if e is None else ("BUENA" if e else "MALA")
                             print(f"  Pos {i + 1}: {estado_txt}")
+
+                        ciclos_completados += 1
+                        if ciclos_completados % AUTO_CALIBRATION_EVERY_CYCLES == 0:
+                            calibracion_auto_pendiente = True
+                            print(
+                                f"\nCalibracion automatica pendiente "
+                                f"({ciclos_completados} ciclos)."
+                            )
 
                         print("\nEsperando nuevo IN PLACE...")
 
