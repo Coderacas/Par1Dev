@@ -17,7 +17,7 @@ const int SERVO_BUENA  = SERVO_CENTRO + SERVO_DELTA;
 const int SERVO_MALA   = SERVO_CENTRO - SERVO_DELTA;
 
 Servo servoClasificador;
-int servoAnguloActual = SERVO_CENTRO;
+int servoAnguloActual = SERVO_BUENA;
 
 // =====================================================
 // SENSOR IN PLACE

@@ -46,6 +46,7 @@ RAW_CSV = OUTPUT_DIR / "features_luces_raw.csv"
 DERIVED_CSV = OUTPUT_DIR / "features_dataset_ml.csv"
 WINDOW_NAME = "Dataset luces"
 CALIBRATION_LIGHT_SETTLE_S = 0.04
+MAX_CALIBRATION_ROUNDS = 5
 
 LABEL_COLORS = {
     None: (0, 255, 255),
@@ -417,7 +418,7 @@ def main():
                     estado = "calibrando"
                     ronda_calibracion = 1
                     ser.reset_input_buffer()
-                    print("Calibracion manual iniciada. Ronda 1...")
+                    print(f"Calibracion manual iniciada. Ronda 1/{MAX_CALIBRATION_ROUNDS}...")
                     ser.write(b"g")
 
             frame = read_frame(cam)
@@ -441,7 +442,10 @@ def main():
 
             if c == "z":
                 if estado == "calibrando":
-                    print(f"[Arduino] CALIBRACION_FOTOS_LISTAS ronda {ronda_calibracion}.")
+                    print(
+                        f"[Arduino] CALIBRACION_FOTOS_LISTAS "
+                        f"ronda {ronda_calibracion}/{MAX_CALIBRATION_ROUNDS}."
+                    )
                     frames_combinados = combinar_fotos_calibracion(frames_calibracion_luces)
                     faltantes = [
                         idx + 1
@@ -471,6 +475,15 @@ def main():
                             "o sin deteccion. Esperando siguiente comando..."
                         )
                         ser.write(b"o")
+                    elif ronda_calibracion >= MAX_CALIBRATION_ROUNDS:
+                        estado = "esperando_in_place"
+                        ser.reset_input_buffer()
+                        print(
+                            "Calibracion detenida: limite de "
+                            f"{MAX_CALIBRATION_ROUNDS} rondas alcanzado. "
+                            "Esperando siguiente comando..."
+                        )
+                        ser.write(b"o")
                     else:
                         enviar_correcciones_calibracion(ser, resultado_cal)
                         ronda_calibracion += 1
@@ -478,7 +491,10 @@ def main():
                             [None] * LUCES_POR_EST for _ in ROIS_POR_ESTACION
                         ]
                         ser.reset_input_buffer()
-                        print(f"Repitiendo calibracion. Ronda {ronda_calibracion}...")
+                        print(
+                            f"Repitiendo calibracion. "
+                            f"Ronda {ronda_calibracion}/{MAX_CALIBRATION_ROUNDS}..."
+                        )
                         ser.write(b"g")
 
                 elif estado == "capturando":
@@ -584,6 +600,8 @@ def main():
 
             elif "STEPPERS_LISTOS" in linea:
                 print("Steppers listos. Esperando siguiente pelota...")
+                ser.write(b"b")
+                print("Servo enviado a b.")
                 estado = "esperando_in_place"
                 in_place_listo = False
 
