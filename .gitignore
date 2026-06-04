@@ -19,3 +19,9 @@ __pycache__/
 # Archivos del sistema
 .DS_Store
 Thumbs.db
+photos/
+
+# Desarrollo / entrenamiento local (no Raspberry)
+ML Model/
+PythonDev/Project/PrototypeDev/data/*.csv
+PythonDev/Project/PrototypeDev/evaluar_modelo_*.py

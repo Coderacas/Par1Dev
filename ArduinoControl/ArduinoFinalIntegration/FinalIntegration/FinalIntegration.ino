@@ -15,14 +15,9 @@ const int SERVO_CENTRO = 90;
 const int SERVO_DELTA  = 30;
 const int SERVO_BUENA  = SERVO_CENTRO + SERVO_DELTA;
 const int SERVO_MALA   = SERVO_CENTRO - SERVO_DELTA;
-const int SERVO_PRE_MALA_KICK = SERVO_BUENA + 10;
-const int SERVO_PRE_MALA_KICK_MS = 90;
-const int SERVO_TOQUE_DELTA = 8;
-const int SERVO_TOQUE_MS    = 80;
-const int SERVO_REINTENTO_MS = 120;
 
 Servo servoClasificador;
-int servoAnguloActual = SERVO_BUENA;
+int servoAnguloActual = SERVO_CENTRO;
 
 // =====================================================
 // SENSOR IN PLACE
@@ -58,7 +53,7 @@ Stepper motor3(pasosPorVuelta, phasePins[0], phasePins[1], phasePins[2], phasePi
 Stepper motor4(pasosPorVuelta, phasePins[0], phasePins[1], phasePins[2], phasePins[3]);
 
 // Si no termina el giro o pierde pasos con carga, baja la velocidad.
-int velocidadStepper = 4;
+int velocidadStepper = 5;
 
 // Cada motor comparte los mismos pines de fase y se selecciona con SR3.
 const byte seleccionStepper[4] = {
@@ -140,7 +135,6 @@ bool inPlaceAnterior  = false;
 void moverStepperSeleccionado(int indiceMotor, int steps);
 void apagarTodoSeguro(bool centrarServo);
 void ejecutarCorreccionSerial();
-void moverServoSuave(int destino);
 
 // =====================================================
 // SETUP
@@ -402,36 +396,9 @@ void apagarTodasLasLuces()
 void servoPos(bool buena)
 {
   int angulo = buena ? SERVO_BUENA : SERVO_MALA;
-  int toque = buena ? angulo - SERVO_TOQUE_DELTA : angulo + SERVO_TOQUE_DELTA;
 
-  angulo = constrain(angulo, SERVO_CENTRO - SERVO_DELTA, SERVO_CENTRO + SERVO_DELTA);
-  toque = constrain(toque, SERVO_CENTRO - SERVO_DELTA, SERVO_CENTRO + SERVO_DELTA);
-
-  if (!buena)
-  {
-    servoClasificador.write(constrain(SERVO_PRE_MALA_KICK, 0, 180));
-    delay(SERVO_PRE_MALA_KICK_MS);
-    servoClasificador.write(SERVO_MALA);
-    delay(SERVO_REINTENTO_MS);
-    servoClasificador.write(SERVO_MALA);
-    servoAnguloActual = SERVO_MALA;
-    return;
-  }
-
-  servoClasificador.write(toque);
-  delay(SERVO_TOQUE_MS);
-  servoClasificador.write(angulo);
-  delay(SERVO_REINTENTO_MS);
   servoClasificador.write(angulo);
   servoAnguloActual = angulo;
-
-}
-
-void moverServoSuave(int destino)
-{
-  destino = constrain(destino, SERVO_CENTRO - SERVO_DELTA, SERVO_CENTRO + SERVO_DELTA);
-  servoClasificador.write(destino);
-  servoAnguloActual = destino;
 }
 
 // =====================================================

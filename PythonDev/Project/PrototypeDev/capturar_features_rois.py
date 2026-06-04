@@ -27,10 +27,17 @@ from main import (
     LUCES_POR_EST,
     N_FEATURES,
     ROIS_POR_ESTACION,
+    calcular_steps_calibracion,
+    combinar_fotos_calibracion,
     decodificar_paso,
     derivar_features,
+    enviar_correcciones_calibracion,
     extraer_features,
     find_arduino_port,
+)
+from motor_calibration import (
+    calibrar_motores_con_fotos,
+    imprimir_resultado_calibracion,
 )
 
 
@@ -38,6 +45,7 @@ OUTPUT_DIR = Path(__file__).resolve().parent / "data"
 RAW_CSV = OUTPUT_DIR / "features_luces_raw.csv"
 DERIVED_CSV = OUTPUT_DIR / "features_dataset_ml.csv"
 WINDOW_NAME = "Dataset luces"
+CALIBRATION_LIGHT_SETTLE_S = 0.04
 
 LABEL_COLORS = {
     None: (0, 255, 255),
@@ -193,6 +201,36 @@ def pedir_label_estacion(cam, estacion, luz, paso, labels):
             return label, frame
 
 
+def pedir_label_estacion_con_frame(frame_base, estacion, labels):
+    print(f"\nEtiquetando estacion {estacion + 1}")
+    print("Marca esta pelota/estacion: b=buena, m=mala, q=salir")
+
+    while True:
+        preview = dibujar_rois(
+            frame_base,
+            estacion_actual=estacion,
+            labels=labels,
+            mensaje=f"E{estacion + 1}: b=buena, m=mala",
+        )
+        show_live_frame(WINDOW_NAME, preview)
+
+        key = get_key(30)
+        cmd = _leer_cmd_terminal()
+
+        if key in (ord("q"), 27) or cmd in ("q", "salir", "exit"):
+            raise KeyboardInterrupt
+
+        if key == ord("b"):
+            return "buena"
+
+        if key == ord("m"):
+            return "mala"
+
+        label = label_desde_cmd(cmd)
+        if label is not None:
+            return label
+
+
 def capturar_features_luz(cam, estacion, luz, paso, labels, frame=None):
     if frame is None:
         frame = read_frame(cam)
@@ -251,6 +289,25 @@ def leer_linea_desde_primer_caracter(ser, primer_caracter):
     return (primer_caracter + resto).strip()
 
 
+def capturar_frame_calibracion(cam):
+    time.sleep(CALIBRATION_LIGHT_SETTLE_S)
+    return read_frame(cam)
+
+
+def calibracion_terminada(result):
+    for detection in result.detections:
+        if not detection.ok or detection.error_px is None:
+            continue
+
+        error_x, error_y = detection.error_px
+        error_eje = error_y if detection.station == 3 else error_x
+
+        if calcular_steps_calibracion(detection.station, error_eje) > 0:
+            return False
+
+    return True
+
+
 def pausar_si_fallo():
     try:
         input("\nPresiona ENTER para cerrar...")
@@ -295,29 +352,82 @@ def main():
         print("Serial listo.")
 
         print("\nCaptura dataset con luces")
-        print("1. Coloca la pelota y activa el sensor IN PLACE.")
-        print("2. Primero captura automaticamente las 16 fotos/features.")
-        print("3. Luego prende otra vez la luz 1 de cada estacion para etiquetar b/m.")
-        print("4. El script guarda raw + dataset ML con esas etiquetas.")
-        print("5. Escribe salir o presiona q para terminar.\n")
+        print("1. Coloca la pelota.")
+        print("2. Escribe capturar para guardar features/dataset.")
+        print("   Escribe calibrar para solo calibrar motores.")
+        print("3. Captura automaticamente las 16 fotos/features.")
+        print("4. Luego prende otra vez la luz 1 de cada estacion para etiquetar b/m.")
+        print("5. El script guarda raw + dataset ML con esas etiquetas.")
+        print("6. Calibrar es independiente: escribe calibrar cuando quieras.")
+        print("7. Escribe salir o presiona q para terminar.\n")
         print(f"Raw: {RAW_CSV}")
         print(f"ML : {DERIVED_CSV}\n")
 
         estado = "esperando_in_place"
         raw_records = [[None] * LUCES_POR_EST for _ in ROIS_POR_ESTACION]
+        frames_features_luces = [
+            [None] * LUCES_POR_EST for _ in ROIS_POR_ESTACION
+        ]
+        frames_calibracion_luces = [
+            [None] * LUCES_POR_EST for _ in ROIS_POR_ESTACION
+        ]
+        in_place_listo = False
+        ronda_calibracion = 0
 
         while True:
             cmd = _leer_cmd_terminal()
             if cmd in ("q", "salir", "exit"):
                 break
 
+            if cmd in ("c", "capturar"):
+                if estado != "esperando_in_place":
+                    print(f"No puedo iniciar ahora: estado={estado}")
+                elif not in_place_listo:
+                    print("Espera a que Arduino mande IN PLACE antes de capturar.")
+                else:
+                    matrices = [
+                        np.zeros((LUCES_POR_EST, N_FEATURES), dtype=np.float32)
+                        for _ in ROIS_POR_ESTACION
+                    ]
+                    raw_records = [[None] * LUCES_POR_EST for _ in ROIS_POR_ESTACION]
+                    frames_features_luces = [
+                        [None] * LUCES_POR_EST for _ in ROIS_POR_ESTACION
+                    ]
+                    frames_calibracion_luces = [
+                        [None] * LUCES_POR_EST for _ in ROIS_POR_ESTACION
+                    ]
+                    labels = [None] * len(ROIS_POR_ESTACION)
+                    sample_ids = [None] * len(ROIS_POR_ESTACION)
+
+                    estado = "capturando"
+                    ser.reset_input_buffer()
+                    print("Captura iniciada. Capturando 16 fotos/features...")
+                    ser.write(b"g")
+
+            if cmd == "calibrar":
+                if estado != "esperando_in_place":
+                    print(f"No puedo iniciar ahora: estado={estado}")
+                elif not in_place_listo:
+                    print("Espera a que Arduino mande IN PLACE antes de calibrar.")
+                else:
+                    frames_calibracion_luces = [
+                        [None] * LUCES_POR_EST for _ in ROIS_POR_ESTACION
+                    ]
+
+                    estado = "calibrando"
+                    ronda_calibracion = 1
+                    ser.reset_input_buffer()
+                    print("Calibracion manual iniciada. Ronda 1...")
+                    ser.write(b"g")
+
             frame = read_frame(cam)
             mensaje = {
                 "esperando_in_place": "Esperando IN PLACE",
+                "calibrando": "Calibrando motores",
                 "capturando": "Capturando 16 fotos",
                 "etiquetando": "Etiquetando con luz 1",
             }.get(estado, "")
-            if estado != "capturando":
+            if estado not in ("capturando", "calibrando"):
                 preview = dibujar_rois(frame, labels=labels, mensaje=mensaje)
                 show_live_frame(WINDOW_NAME, preview)
             get_key(1)
@@ -330,7 +440,48 @@ def main():
             c = raw.decode("ascii", errors="ignore")
 
             if c == "z":
-                if estado == "capturando":
+                if estado == "calibrando":
+                    print(f"[Arduino] CALIBRACION_FOTOS_LISTAS ronda {ronda_calibracion}.")
+                    frames_combinados = combinar_fotos_calibracion(frames_calibracion_luces)
+                    faltantes = [
+                        idx + 1
+                        for idx, frame in enumerate(frames_combinados)
+                        if frame is None
+                    ]
+
+                    if faltantes:
+                        raise RuntimeError(
+                            "Faltaron fotos de calibracion en: "
+                            + ", ".join(f"E{idx}" for idx in faltantes)
+                        )
+
+                    resultado_cal = calibrar_motores_con_fotos(
+                        frames_combinados,
+                        ROIS_POR_ESTACION,
+                        expand_scale=1.25,
+                        tolerance_px=8.0,
+                    )
+                    imprimir_resultado_calibracion(resultado_cal)
+
+                    if calibracion_terminada(resultado_cal):
+                        estado = "esperando_in_place"
+                        ser.reset_input_buffer()
+                        print(
+                            "Calibracion lista: todas dentro de umbral "
+                            "o sin deteccion. Esperando siguiente comando..."
+                        )
+                        ser.write(b"o")
+                    else:
+                        enviar_correcciones_calibracion(ser, resultado_cal)
+                        ronda_calibracion += 1
+                        frames_calibracion_luces = [
+                            [None] * LUCES_POR_EST for _ in ROIS_POR_ESTACION
+                        ]
+                        ser.reset_input_buffer()
+                        print(f"Repitiendo calibracion. Ronda {ronda_calibracion}...")
+                        ser.write(b"g")
+
+                elif estado == "capturando":
                     estado = "etiquetando"
                     labels = [None] * len(ROIS_POR_ESTACION)
                     print("[Arduino] FOTOS_LISTAS. Reiniciando luces para etiquetar...")
@@ -347,15 +498,24 @@ def main():
             if decoded is not None:
                 estacion, luz, paso = decoded
 
+                if estado == "calibrando":
+                    frames_calibracion_luces[estacion][luz] = capturar_frame_calibracion(cam)
+                    print(f"Calibracion E{estacion + 1} L{luz + 1}")
+                    ser.write(b"k")
+                    continue
+
                 if estado == "capturando":
+                    frame_luz = read_frame(cam)
                     vec = capturar_features_luz(
                         cam,
                         estacion,
                         luz,
                         paso,
                         labels,
+                        frame=frame_luz,
                     )
 
+                    frames_features_luces[estacion][luz] = frame_luz
                     matrices[estacion][luz] = vec
                     raw_records[estacion][luz] = (paso, vec)
 
@@ -366,11 +526,15 @@ def main():
                 if estado == "etiquetando":
                     if luz == 0:
                         print(f"Etiquetando E{estacion + 1}")
-                        label, _ = pedir_label_estacion(
-                            cam,
+                        frame_etiqueta = combinar_fotos_calibracion(
+                            [frames_features_luces[estacion]]
+                        )[0]
+                        if frame_etiqueta is None:
+                            frame_etiqueta = read_frame(cam)
+
+                        label = pedir_label_estacion_con_frame(
+                            frame_etiqueta,
                             estacion,
-                            luz,
-                            paso,
                             labels,
                         )
                         labels[estacion] = label
@@ -415,25 +579,17 @@ def main():
                 print(f"[Arduino] {linea}")
 
             if "IN PLACE" in linea and estado == "esperando_in_place":
-                matrices = [
-                    np.zeros((LUCES_POR_EST, N_FEATURES), dtype=np.float32)
-                    for _ in ROIS_POR_ESTACION
-                ]
-                raw_records = [[None] * LUCES_POR_EST for _ in ROIS_POR_ESTACION]
-                labels = [None] * len(ROIS_POR_ESTACION)
-                sample_ids = [None] * len(ROIS_POR_ESTACION)
-
-                estado = "capturando"
-                ser.reset_input_buffer()
-                print("IN PLACE detectado. Capturando 16 fotos...")
-                ser.write(b"g")
+                in_place_listo = True
+                print("IN PLACE recibido. Escribe capturar o calibrar.")
 
             elif "STEPPERS_LISTOS" in linea:
                 print("Steppers listos. Esperando siguiente pelota...")
                 estado = "esperando_in_place"
+                in_place_listo = False
 
             elif "APAGADO" in linea:
                 estado = "esperando_in_place"
+                in_place_listo = False
 
     except KeyboardInterrupt:
         print("\nCaptura detenida.")

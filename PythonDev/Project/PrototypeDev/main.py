@@ -60,10 +60,10 @@ BAUDRATE = 9600
 # Un ROI por estacion: (x, y, w, h)
 # Ajusta cada tupla con las coordenadas reales de cada estacion.
 ROIS_POR_ESTACION = [
-    (145, 70, 93, 92),  # Estacion 1
-    (285, 65, 91, 88),  # Estacion 2
-    (305, 290, 96, 100),  # Estacion 3
-    (471, 315, 109, 98),  # Estacion 4
+    (157, 71, 89, 92),  # Estacion 1
+    (287, 64, 97, 95),  # Estacion 2
+    (304, 285, 102, 97),  # Estacion 3
+    (472, 313, 105, 104),  # Estacion 4
 ]
 
 
@@ -73,7 +73,7 @@ LUZ_CALIBRACION_POR_ESTACION = [0, 0, 1, 0]
 
 SERVO_SETTLE_S    = 0.5
 STEPPER_TIMEOUT_S = 30.0
-AUTO_CALIBRATION_EVERY_CYCLES = 5
+AUTO_CALIBRATION_EVERY_CYCLES = 3
 MODEL_PATH = Path(__file__).resolve().parents[3] / "golf_ball_rf_model.pkl"
 
 CALIBRATION_ERROR_THRESHOLD_PX = 6.0
