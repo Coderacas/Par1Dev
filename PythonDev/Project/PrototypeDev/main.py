@@ -73,8 +73,13 @@ LUZ_CALIBRACION_POR_ESTACION = [0, 0, 1, 0]
 
 SERVO_SETTLE_S    = 0.5
 STEPPER_TIMEOUT_S = 30.0
-AUTO_CALIBRATION_EVERY_CYCLES = 2
-MODEL_PATH = Path(__file__).resolve().parents[3] / "golf_ball_rf_model.pkl"
+AUTO_CALIBRATION_EVERY_CYCLES = 1
+MAX_CALIBRATION_ROUNDS = 2
+MODEL_PATH = Path(__file__).resolve().parents[3] / "golf_ball_station_extra_trees_model.pkl"
+PROBA_BUENA_STICKY = 0.65
+PROBA_PROMEDIO_BUENA = 0.50
+PROBA_COMBO_MAX_BUENA = 0.50
+PROBA_COMBO_MEAN_BUENA = 0.40
 
 CALIBRATION_ERROR_THRESHOLD_PX = 6.0
 CALIBRATION_STEPS_PER_PIXEL = 0.5
@@ -141,6 +146,29 @@ FEATURE_NAMES = [
 
 N_FEATURES = len(FEATURE_NAMES)
 
+DERIVED_FEATURE_NAMES = (
+    [f"std_{name}" for name in FEATURE_NAMES]
+    + [f"mean_{name}" for name in FEATURE_NAMES]
+    + [f"max_{name}" for name in FEATURE_NAMES]
+    + [f"min_{name}" for name in FEATURE_NAMES]
+    + [f"opp13_abs_{name}" for name in FEATURE_NAMES]
+    + [f"opp24_abs_{name}" for name in FEATURE_NAMES]
+    + [f"dir_energy_{name}" for name in FEATURE_NAMES]
+    + [f"dir_ratio_{name}" for name in FEATURE_NAMES]
+    + [f"l{light}_{name}" for light in range(1, 5) for name in FEATURE_NAMES]
+    + [f"range_ratio_{name}" for name in FEATURE_NAMES]
+    + [f"cv_lights_{name}" for name in FEATURE_NAMES]
+    + [
+        "mean_grad_over_intensity",
+        "max_grad_over_intensity",
+        "mean_lap_over_intensity",
+        "std_lap_over_intensity",
+        "texture_energy_over_intensity",
+        "glare_over_intensity",
+    ]
+    + [f"estacion_{idx}" for idx in range(1, NUM_ESTACIONES + 1)]
+)
+
 
 def extraer_features(img_roi: np.ndarray) -> np.ndarray:
     """Imagen ROI -> vector de features brutas."""
@@ -158,17 +186,67 @@ def extraer_features(img_roi: np.ndarray) -> np.ndarray:
     return np.array(vec, dtype=np.float32)
 
 
-def derivar_features(mat: np.ndarray) -> np.ndarray:
+def derivar_features(mat: np.ndarray, estacion=None) -> np.ndarray:
     """Matriz 4xN_FEATURES -> vector derivado para clasificador."""
+    l1 = mat[0]
+    l2 = mat[1]
+    l3 = mat[2]
+    l4 = mat[3]
+
+    diff13 = l1 - l3
+    diff24 = l2 - l4
+    mean_features = np.mean(mat, axis=0)
+    max_features = np.max(mat, axis=0)
+    min_features = np.min(mat, axis=0)
+    directional_energy = np.sqrt((diff13 * diff13) + (diff24 * diff24))
+    directional_ratio = directional_energy / (np.abs(mean_features) + 1e-6)
+    range_ratio = (max_features - min_features) / (np.abs(mean_features) + 1e-6)
+    cv_lights = np.std(mat, axis=0) / (np.abs(mean_features) + 1e-6)
+
+    idx_mean_intensity = FEATURE_NAMES.index("mean_intensity")
+    idx_mean_grad = FEATURE_NAMES.index("mean_grad")
+    idx_max_grad = FEATURE_NAMES.index("max_grad")
+    idx_mean_abs_lap = FEATURE_NAMES.index("mean_abs_lap")
+    idx_std_lap = FEATURE_NAMES.index("std_lap")
+    idx_glare_pct = FEATURE_NAMES.index("glare_pct")
+    intensity = abs(mean_features[idx_mean_intensity]) + 1e-6
+    texture_ratios = np.array([
+        mean_features[idx_mean_grad] / intensity,
+        mean_features[idx_max_grad] / intensity,
+        mean_features[idx_mean_abs_lap] / intensity,
+        mean_features[idx_std_lap] / intensity,
+        (
+            mean_features[idx_mean_grad]
+            + mean_features[idx_mean_abs_lap]
+            + mean_features[idx_std_lap]
+        ) / intensity,
+        mean_features[idx_glare_pct] / intensity,
+    ], dtype=np.float32)
+    estacion_one_hot = np.zeros(NUM_ESTACIONES, dtype=np.float32)
+
+    if estacion is not None:
+        estacion_idx = int(estacion) - 1
+        if 0 <= estacion_idx < NUM_ESTACIONES:
+            estacion_one_hot[estacion_idx] = 1.0
+
     return np.concatenate([
         np.std(mat,  axis=0),
-        np.mean(mat, axis=0),
-        np.max(mat,  axis=0),
-        np.min(mat,  axis=0),
+        mean_features,
+        max_features,
+        min_features,
+        np.abs(diff13),
+        np.abs(diff24),
+        directional_energy,
+        directional_ratio,
+        mat.reshape(-1),
+        range_ratio,
+        cv_lights,
+        texture_ratios,
+        estacion_one_hot,
     ])
 
 
-def clasificar(vec_derivado: np.ndarray) -> bool:
+def clasificar(vec_derivado: np.ndarray, estacion=None) -> bool:
     """
     Placeholder:
       True  = BUENA
@@ -197,19 +275,55 @@ def cargar_modelo():
     return _modelo_bundle
 
 
-def clasificar(vec_derivado: np.ndarray) -> bool:
-    """True = BUENA, False = MALA."""
+def clasificar_con_probabilidad(vec_derivado: np.ndarray, estacion=None):
+    """Devuelve (resultado, proba_buena, threshold). True = BUENA."""
     bundle = cargar_modelo()
-    modelo = bundle["model"]
-    threshold = float(bundle.get("good_probability_threshold", 0.5))
+    model_bundle = bundle
 
-    x = np.asarray(vec_derivado, dtype=np.float32).reshape(1, -1)
+    if bundle.get("model_type") == "extra_trees_by_station":
+        if estacion is None:
+            raise ValueError("El modelo por estacion requiere parametro estacion.")
+
+        station_number = int(estacion) + 1
+        model_bundle = bundle["station_models"][station_number]
+
+    modelo = model_bundle["model"]
+    threshold = float(model_bundle.get("good_probability_threshold", 0.5))
+
+    vec_full = np.asarray(vec_derivado, dtype=np.float32)
+    feature_columns = model_bundle.get("feature_columns")
+
+    if feature_columns is not None and len(feature_columns) != len(DERIVED_FEATURE_NAMES):
+        feature_index = {name: idx for idx, name in enumerate(DERIVED_FEATURE_NAMES)}
+        vec_full = np.asarray(
+            [vec_full[feature_index[name]] for name in feature_columns],
+            dtype=np.float32,
+        )
+
+    x = vec_full.reshape(1, -1)
 
     if hasattr(modelo, "predict_proba"):
         proba_buena = float(modelo.predict_proba(x)[0][1])
-        return proba_buena >= threshold
+        resultado = proba_buena >= threshold
+        prefijo = f"  E{estacion + 1} ML:" if estacion is not None else "  ML:"
+        print(
+            prefijo + " "
+            f"proba_buena={proba_buena:.3f} "
+            f"umbral_buena={threshold:.3f} "
+            f"-> {'BUENA' if resultado else 'MALA'}"
+        )
+        return resultado, proba_buena, threshold
 
-    return bool(modelo.predict(x)[0])
+    resultado = bool(modelo.predict(x)[0])
+    prefijo = f"  E{estacion + 1} ML:" if estacion is not None else "  ML:"
+    print(f"{prefijo} predict -> {'BUENA' if resultado else 'MALA'}")
+    return resultado, None, threshold
+
+
+def clasificar(vec_derivado: np.ndarray, estacion=None) -> bool:
+    """True = BUENA, False = MALA."""
+    resultado, _, _ = clasificar_con_probabilidad(vec_derivado, estacion=estacion)
+    return resultado
 
 
 def fusionar_estado(previo, actual):
@@ -229,11 +343,52 @@ def fusionar_estado(previo, actual):
     return None
 
 
+def estado_desde_probabilidades(historial):
+    valores = [p for p in historial if p is not None]
+
+    if not valores:
+        return None
+
+    max_p = max(valores)
+    mean_p = sum(valores) / len(valores)
+
+    if max_p >= PROBA_BUENA_STICKY:
+        return True
+
+    if max_p >= PROBA_COMBO_MAX_BUENA and mean_p >= PROBA_COMBO_MEAN_BUENA:
+        return True
+
+    return mean_p >= PROBA_PROMEDIO_BUENA
+
+
 def estado_texto(estado):
     if estado is None:
         return "-"
 
     return "BUENA" if estado else "MALA"
+
+
+def estado_texto_con_prob(estado, proba_buena):
+    texto = estado_texto(estado)
+
+    if proba_buena is None:
+        return texto
+
+    if isinstance(proba_buena, list):
+        valores = [p for p in proba_buena if p is not None]
+
+        if not valores:
+            return texto
+
+        promedio = sum(valores) / len(valores)
+        return (
+            f"{texto} "
+            f"(max_p={max(valores):.3f}, "
+            f"mean_p={promedio:.3f}, "
+            f"n={len(valores)})"
+        )
+
+    return f"{texto} (p_buena={proba_buena:.3f})"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -309,11 +464,11 @@ def decodificar_paso(byte_recibido: bytes):
     return estacion, luz_en_estacion, paso
 
 
-def procesar_fotos_listas(ser, memoria):
+def procesar_fotos_listas(ser, memoria, probabilidades):
     """
     Cuando Arduino manda 'z':
       - imprime clasificación final
-      - decide servo según posición 4
+      - decide servo según estación 1
       - manda b/m
       - espera
       - manda s para steppers
@@ -322,21 +477,23 @@ def procesar_fotos_listas(ser, memoria):
 
     for i, e in enumerate(memoria):
         estado_txt = "—" if e is None else ("BUENA" if e else "MALA")
-        print(f"  Pelota {i + 1}: {estado_txt}")
+        print(f"  Pelota {i + 1}: {estado_texto_con_prob(e, probabilidades[i])}")
 
-    # Pelota en posición 4 es la que sale
-    estado_pos4 = memoria[NUM_ESTACIONES - 1]
+    # La pelota en E1 es la que esta saliendo.
+    estado_salida = memoria[0]
+    proba_salida = probabilidades[0]
 
     # Si no hay dato, por seguridad la tratamos como mala
-    if estado_pos4 is None:
-        estado_pos4 = False
+    if estado_salida is None:
+        estado_salida = False
 
     # Servo antes de steppers
-    cmd_servo = b"b" if estado_pos4 else b"m"
+    cmd_servo = b"b" if estado_salida else b"m"
 
     print(
         f"\nServo: "
-        f"{'derecha (BUENA)' if estado_pos4 else 'izquierda (MALA)'}"
+        f"{estado_texto_con_prob(estado_salida, proba_salida)} "
+        f"-> {'derecha' if estado_salida else 'izquierda'}"
     )
 
     ser.write(cmd_servo)
@@ -446,6 +603,20 @@ def enviar_correcciones_calibracion(ser, result):
         print("  Sin correcciones necesarias.")
 
 
+def calibracion_terminada(result):
+    for detection in result.detections:
+        if not detection.ok or detection.error_px is None:
+            continue
+
+        axis = CALIBRATION_AXIS_BY_STATION.get(detection.station, "x")
+        error_value = detection.error_px[0] if axis == "x" else detection.error_px[1]
+
+        if calcular_steps_calibracion(detection.station, error_value) > 0:
+            return False
+
+    return True
+
+
 # ─────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────
@@ -475,11 +646,13 @@ def main():
         ]
 
         memoria = [None] * NUM_ESTACIONES
+        probabilidades = [[] for _ in range(NUM_ESTACIONES)]
 
         esperando_steppers = False
         t_inicio_steppers = None
         calibrando_con_luces = False
         calibracion_auto_pendiente = False
+        ronda_calibracion_luces = 0
         ciclos_completados = 0
         frames_calibracion_luces = [
             [None] * LUCES_POR_EST for _ in range(NUM_ESTACIONES)
@@ -526,11 +699,12 @@ def main():
 
             if cmd == "calibrar_luces":
                 calibrando_con_luces = True
+                ronda_calibracion_luces = 1
                 frames_calibracion_luces = [
                     [None] * LUCES_POR_EST for _ in range(NUM_ESTACIONES)
                 ]
                 ser.reset_input_buffer()
-                print("Calibracion con luces: enviando 'g'.")
+                print(f"Calibracion con luces: ronda 1/{MAX_CALIBRATION_ROUNDS}, enviando 'g'.")
                 print("Capturare L1-L4 por estacion, sin desplegar fotos.")
                 ser.write(b"g")
 
@@ -546,7 +720,10 @@ def main():
                 # ─────────────────────────────────────
                 if c == "z":
                     if calibrando_con_luces:
-                        print("[Arduino] Fotos de calibracion listas.")
+                        print(
+                            "[Arduino] Fotos de calibracion listas "
+                            f"ronda {ronda_calibracion_luces}/{MAX_CALIBRATION_ROUNDS}."
+                        )
                         frames_combinados = combinar_fotos_calibracion(frames_calibracion_luces)
                         faltantes = [
                             idx + 1
@@ -569,19 +746,46 @@ def main():
                             tolerance_px=8.0,
                         )
                         imprimir_resultado_calibracion(resultado_cal)
-                        enviar_correcciones_calibracion(ser, resultado_cal)
 
-                        calibrando_con_luces = False
-                        calibracion_auto_pendiente = False
-                        reset_ciclo()
-                        ser.reset_input_buffer()
-                        print("Calibracion lista. Iniciando captura normal de esta pelota...")
-                        ser.write(b"g")
+                        if calibracion_terminada(resultado_cal):
+                            calibrando_con_luces = False
+                            calibracion_auto_pendiente = False
+                            reset_ciclo()
+                            ser.reset_input_buffer()
+                            print(
+                                "Calibracion lista: todas dentro de umbral "
+                                "o sin deteccion. Iniciando captura normal de esta pelota..."
+                            )
+                            ser.write(b"g")
+                        elif ronda_calibracion_luces >= MAX_CALIBRATION_ROUNDS:
+                            calibrando_con_luces = False
+                            calibracion_auto_pendiente = False
+                            reset_ciclo()
+                            ser.reset_input_buffer()
+                            print(
+                                "Calibracion detenida: limite de "
+                                f"{MAX_CALIBRATION_ROUNDS} rondas alcanzado. "
+                                "Sigo con captura normal."
+                            )
+                            ser.write(b"g")
+                        else:
+                            enviar_correcciones_calibracion(ser, resultado_cal)
+                            ronda_calibracion_luces += 1
+                            frames_calibracion_luces = [
+                                [None] * LUCES_POR_EST for _ in range(NUM_ESTACIONES)
+                            ]
+                            reset_ciclo()
+                            ser.reset_input_buffer()
+                            print(
+                                "Repitiendo calibracion con luces. "
+                                f"Ronda {ronda_calibracion_luces}/{MAX_CALIBRATION_ROUNDS}..."
+                            )
+                            ser.write(b"g")
                         continue
 
                     print("[Arduino] FOTOS_LISTAS")
 
-                    procesar_fotos_listas(ser, memoria)
+                    procesar_fotos_listas(ser, memoria, probabilidades)
 
                     esperando_steppers = True
                     t_inicio_steppers = time.time()
@@ -607,10 +811,7 @@ def main():
                         ser.write(b"k")
                         continue
 
-                    print(
-                        f"[Paso {paso:02d}] "
-                        f"Estación {estacion + 1}, cara {luz + 1} — capturando..."
-                    )
+                    print(f"[Paso {paso:02d}] E{estacion + 1} L{luz + 1}")
 
                     roi_x, roi_y, roi_w, roi_h = ROIS_POR_ESTACION[estacion]
 
@@ -620,27 +821,33 @@ def main():
 
                     matrices[estacion][luz] = vec
 
-                    print(f"  features: {vec.round(3)}")
-
                     # ACK para que Arduino avance a la siguiente luz
                     ser.write(b"k")
 
                     # Cuando termina las 4 caras de una estación, clasificar
                     if luz == LUCES_POR_EST - 1:
-                        vec_rf = derivar_features(matrices[estacion])
-                        resultado = clasificar(vec_rf)
+                        vec_rf = derivar_features(matrices[estacion], estacion=estacion + 1)
+                        resultado, proba_buena, _ = clasificar_con_probabilidad(
+                            vec_rf,
+                            estacion=estacion,
+                        )
 
                         previo = memoria[estacion]
-                        memoria[estacion] = fusionar_estado(previo, resultado)
+                        proba_previa = list(probabilidades[estacion])
+                        probabilidades[estacion].append(proba_buena)
+                        memoria[estacion] = estado_desde_probabilidades(
+                            probabilidades[estacion]
+                        )
                         print(
-                            f"     carry previo={estado_texto(previo)} "
-                            f"actual={estado_texto(resultado)} "
-                            f"final={estado_texto(memoria[estacion])}"
+                            f"  E{estacion + 1} arrastre: "
+                            f"previo={estado_texto_con_prob(previo, proba_previa)} | "
+                            f"actual={estado_texto_con_prob(resultado, proba_buena)} | "
+                            f"acumulado={estado_texto_con_prob(memoria[estacion], probabilidades[estacion])}"
                         )
 
                         print(
                             f"  → Estación {estacion + 1}: "
-                            f"{'BUENA' if memoria[estacion] else 'MALA'}"
+                            f"{estado_texto_con_prob(memoria[estacion], probabilidades[estacion])}"
                         )
 
                 elif c in ("\r", "\n", ""):
@@ -668,11 +875,15 @@ def main():
                     ):
                         reset_ciclo()
                         calibrando_con_luces = True
+                        ronda_calibracion_luces = 1
                         frames_calibracion_luces = [
                             [None] * LUCES_POR_EST for _ in range(NUM_ESTACIONES)
                         ]
                         ser.reset_input_buffer()
-                        print("IN PLACE detectado. Ejecutando calibracion automatica antes del ciclo normal...")
+                        print(
+                            "IN PLACE detectado. Ejecutando calibracion automatica "
+                            f"ronda 1/{MAX_CALIBRATION_ROUNDS} antes del ciclo normal..."
+                        )
                         ser.write(b"g")
                         continue
 
@@ -696,15 +907,17 @@ def main():
                         t_inicio_steppers = None
 
                         # Rotar memoria:
-                        # pos 4 sale, 3→4, 2→3, 1→2, nueva pos 1 = None
-                        memoria.pop()
-                        memoria.insert(0, None)
+                        # E1 sale, E2->E1, E3->E2, E4->E3, nueva E4 = None
+                        memoria.pop(0)
+                        memoria.append(None)
+                        probabilidades.pop(0)
+                        probabilidades.append([])
 
                         print("\nSteppers terminados.")
                         print("Memoria actualizada:")
 
                         for i, e in enumerate(memoria):
-                            estado_txt = "—" if e is None else ("BUENA" if e else "MALA")
+                            estado_txt = estado_texto_con_prob(e, probabilidades[i])
                             print(f"  Pos {i + 1}: {estado_txt}")
 
                         ciclos_completados += 1

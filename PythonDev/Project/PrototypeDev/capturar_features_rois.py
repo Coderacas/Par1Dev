@@ -27,6 +27,7 @@ from main import (
     LUCES_POR_EST,
     N_FEATURES,
     ROIS_POR_ESTACION,
+    DERIVED_FEATURE_NAMES,
     calcular_steps_calibracion,
     combinar_fotos_calibracion,
     decodificar_paso,
@@ -53,13 +54,6 @@ LABEL_COLORS = {
     "buena": (0, 200, 0),
     "mala": (0, 0, 255),
 }
-
-DERIVED_FEATURE_NAMES = (
-    [f"std_{name}" for name in FEATURE_NAMES]
-    + [f"mean_{name}" for name in FEATURE_NAMES]
-    + [f"max_{name}" for name in FEATURE_NAMES]
-    + [f"min_{name}" for name in FEATURE_NAMES]
-)
 
 _stdin_queue: queue.Queue = queue.Queue()
 
@@ -266,7 +260,7 @@ def guardar_raw(sample_id, label, estacion, luz, paso, vec):
 def guardar_derived(sample_id, label, estacion, mat):
     timestamp = datetime.now().isoformat(timespec="seconds")
     x, y, w, h = ROIS_POR_ESTACION[estacion]
-    vec = derivar_features(mat)
+    vec = derivar_features(mat, estacion=estacion + 1)
 
     with DERIVED_CSV.open("a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
