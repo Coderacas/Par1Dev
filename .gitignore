@@ -25,3 +25,7 @@ photos/
 ML Model/
 PythonDev/Project/PrototypeDev/data/*.csv
 PythonDev/Project/PrototypeDev/evaluar_modelo_*.py
+
+# Modelo final usado por main.py
+*.pkl
+!golf_ball_station_extra_trees_model.pkl
