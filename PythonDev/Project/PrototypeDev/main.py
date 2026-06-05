@@ -270,7 +270,26 @@ def cargar_modelo():
         if not MODEL_PATH.exists():
             raise FileNotFoundError(f"No existe el modelo entrenado: {MODEL_PATH}")
 
+        model_stat = MODEL_PATH.stat()
+        print(
+            "Cargando modelo ML: "
+            f"{MODEL_PATH.resolve()} "
+            f"(bytes={model_stat.st_size}, "
+            f"mtime={time.ctime(model_stat.st_mtime)})"
+        )
         _modelo_bundle = joblib.load(MODEL_PATH)
+        if isinstance(_modelo_bundle, dict):
+            station_models = _modelo_bundle.get("station_models")
+            stations = (
+                sorted(station_models.keys())
+                if isinstance(station_models, dict)
+                else None
+            )
+            print(
+                "Bundle ML: "
+                f"model_type={_modelo_bundle.get('model_type')} "
+                f"stations={stations}"
+            )
 
     return _modelo_bundle
 
