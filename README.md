@@ -245,8 +245,7 @@ ML Model/train_model.py
 ### Clasificacion con machine learning
 
 - `main.py` ya no depende del clasificador aleatorio.
-- El modelo entrenado final de V6 se carga desde `golf_ball_station_extra_trees_model.pkl`.
-- Ese es el unico `.pkl` que debe quedar versionado en el repositorio.
+- El modelo entrenado se carga desde `golf_ball_rf_model.pkl`.
 - La funcion `clasificar()` usa el modelo con `predict_proba` cuando esta disponible.
 - El umbral de probabilidad para pelota buena se guarda junto con el modelo.
 - La memoria de estado conserva una pelota como `MALA` si alguna estacion previa o actual la marco como mala.
@@ -264,66 +263,6 @@ python "ML Model\train_model.py"
 
 El entrenamiento genera/actualiza el bundle del modelo, que despues consume
 `main.py`.
-
-### Modelo V6 final y compatibilidad
-
-El modelo que debe usar la Raspberry y la computadora de desarrollo es:
-
-```text
-golf_ball_station_extra_trees_model.pkl
-```
-
-`main.py` lo carga con:
-
-```text
-MODEL_PATH = Path(__file__).resolve().parents[3] / "golf_ball_station_extra_trees_model.pkl"
-```
-
-El bundle esperado tiene:
-
-```text
-model_type = extra_trees_by_station
-stations = [1, 2, 3, 4]
-modelo por estacion = ExtraTreesClassifier
-features por estacion = 30
-```
-
-Umbrales actuales por estacion:
-
-```text
-E1 -> 0.40
-E2 -> 0.39
-E3 -> 0.27
-E4 -> 0.48
-```
-
-El modelo fue serializado con `scikit-learn==1.8.0`. Por compatibilidad, el
-entorno que corre `main.py` tambien debe usar:
-
-```text
-scikit-learn==1.8.0
-```
-
-Si aparece un warning tipo `InconsistentVersionWarning`, no se deben confiar
-las probabilidades hasta reinstalar dependencias:
-
-```bash
-git pull origin main
-source .venv/bin/activate
-pip install -r requirements.txt
-python PythonDev/Project/PrototypeDev/main.py
-```
-
-Al cargar el modelo, `main.py` imprime la ruta absoluta, el tamano del archivo,
-la fecha de modificacion y el tipo de bundle. En Raspberry debe verse algo como:
-
-```text
-Cargando modelo ML: /home/falcon/Par1Dev/golf_ball_station_extra_trees_model.pkl
-Bundle ML: model_type=extra_trees_by_station stations=[1, 2, 3, 4]
-```
-
-Si esa ruta o ese nombre cambian, se esta corriendo otro checkout, otro script o
-un modelo equivocado.
 
 ### Captura de features
 
